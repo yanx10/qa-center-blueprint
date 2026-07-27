@@ -12,6 +12,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.6.0] — 2026-07-27
+
+### Summary
+M2 — Analysis Persistence Foundation specification complete. Milestone sequence extended to M14 with new provider milestones (M9–M11) reserved for future GitHub integration.
+
+### Added
+- `product/features/0001-change-intelligence/milestones/m2-analysis-persistence-foundation.md` — full M2 milestone specification (37 sections, 36 acceptance criteria, Mermaid ER diagram, complete API contracts for 6 endpoints, migration specification, rollout plan, test strategy)
+
+### Changed
+- `product/features/0001-change-intelligence/implementation-plan.md` — inserted new M2 (Analysis Persistence Foundation); renumbered old M2→M3, M3→M4, M4→M5, M5→M6, M6→M7, M7→M8, M8→M12, M9→M13, M10→M14; added new future milestones M9 (Repository and Provider Foundation), M10 (GitHub Connection and Manual Synchronization), M11 (Automated Synchronization and Webhooks)
+- `product/features/0001-change-intelligence/acceptance-criteria.md` — inserted M2-AC-01 through M2-AC-36 for Analysis Persistence Foundation; renamed old M2-AC-01–03 to M3-AC-01–03; renamed M3→M4, M4→M5, M5→M6, M6→M7 acceptance criteria sections; renamed M9-AC-01 to M13-AC-01
+- `product/features/0001-change-intelligence/decisions.md` — appended D-018 (draft/ready lifecycle), D-019 (input immutability), D-020 (content excluded from GET responses), D-021 (retry creates new record), D-022 (500,000-character content limit)
+- `product/features/0001-change-intelligence/README.md` — updated summary from [OPEN] placeholder to real description; updated status to "In Progress — M1 Complete, M2 Specification Ready"; added `milestones/` directory row to contents table
+- `product/roadmap.md` — extended Phase 1 milestone table from M9 to M14; updated M1 and blueprint reconciliation status; added M2–M14 with correct statuses
+- `README.md` — updated to v0.6.0; updated Current Milestone to M2 Analysis Persistence Foundation; updated progress bars; added M2 Specification row to Documentation Index; added M2 spec complete entry to Recent Progress; updated Next Milestone section
+
+### Decisions recorded
+- D-018: Analysis lifecycle starts in draft and locks inputs at ready
+- D-019: Inputs are immutable once the parent analysis leaves draft
+- D-020: Input content is excluded from all GET API responses
+- D-021: A failed or cancelled analysis cannot be retried in place; a new record must be created
+- D-022: Input content is limited to 500,000 characters
+
+### Why
+No implementation code should be written before the blueprint for that milestone is reviewed and approved. M2 is the persistence foundation that all subsequent Change Intelligence milestones depend on. The milestone sequence was extended to M14 to accommodate new provider-integration milestones (M9–M11) that were previously conflated with Phase 1 scope and are now correctly deferred to after the pilot (M13).
+
+---
+
 ## [0.5.0] — 2026-07-27
 
 ### Summary

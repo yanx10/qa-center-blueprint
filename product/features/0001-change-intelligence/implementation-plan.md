@@ -2,7 +2,7 @@
 
 ## Overview
 
-Change Intelligence is built as an additive extension to an actively used QA Center application. The implementation is structured in eleven milestones (0 through 10). No implementation work begins before Milestone 0 discovery is complete.
+Change Intelligence is built as an additive extension to an actively used QA Center application. The implementation is structured in fifteen milestones (0 through 14). No implementation work begins before Milestone 0 discovery is complete.
 
 Every milestone that writes production code must include regression verification for all existing QA Center workflows. Milestones 1 through 10 are blocked until Milestone 0 is done.
 
@@ -107,48 +107,113 @@ Run full regression smoke test of all existing workflows before merging. See reg
 
 ---
 
-## Milestone 2 — Manual Input Analysis
+## Milestone 2 — Analysis Persistence Foundation
 
-**Goal:** Accept pasted requirement text and PR diff, run AI analysis, and save a draft analysis record.
+**Goal:** Introduce the database tables and API endpoints that store and manage Change Intelligence analysis records. No AI processing in this milestone.
+
+**Status:** Specification Complete — Ready for Implementation
+
+**Specification:** See `milestones/m2-analysis-persistence-foundation.md` for the full milestone specification.
+
+### Work items
+
+- [ ] Database migration `030_change_intelligence.sql` — introduces `change_analyses` and `change_analysis_inputs` tables
+- [ ] `GET /api/change-intelligence/analyses` — paginated list endpoint (excludes content)
+- [ ] `POST /api/change-intelligence/analyses` — create draft analysis record
+- [ ] `GET /api/change-intelligence/analyses/:id` — retrieve analysis with input metadata (excludes content)
+- [ ] `PATCH /api/change-intelligence/analyses/:id` — update title or transition status
+- [ ] `POST /api/change-intelligence/analyses/:id/inputs` — add input to draft analysis
+- [ ] `DELETE /api/change-intelligence/analyses/:id/inputs/:inputId` — remove input from draft analysis
+- [ ] Feature gate check (403) before auth check on all M2 routes
+- [ ] `requireAuth()` call at top of every M2 route handler
+- [ ] Status machine enforcement: draft → ready → (M3) processing → completed/failed; draft/ready → cancelled
+- [ ] Input immutability: inputs can only be added/removed when analysis is in `draft`
+- [ ] Content size limit: reject `content` exceeding 500,000 characters
+- [ ] Content hash: compute SHA-256 of `content` server-side; never return `content` in GET responses
+- [ ] Unit tests for status machine, enum validation, content limit, and content_hash
+- [ ] API tests for all 6 endpoints × happy path and all error cases
+
+### Expected file impact (proposals — subject to implementation verification)
+
+| File | Change |
+|------|--------|
+| `030_change_intelligence.sql` | New migration — `change_analyses`, `change_analysis_inputs`, indexes |
+| `app/api/change-intelligence/analyses/route.ts` | New file — GET list, POST create |
+| `app/api/change-intelligence/analyses/[id]/route.ts` | New file — GET detail, PATCH update |
+| `app/api/change-intelligence/analyses/[id]/inputs/route.ts` | New file — POST add input |
+| `app/api/change-intelligence/analyses/[id]/inputs/[inputId]/route.ts` | New file — DELETE remove input |
+| `lib/change-intelligence/analyses.ts` | New file — DB query functions |
+
+### What Milestone 2 must NOT include
+
+- No Anthropic API calls of any kind
+- No requirement extraction, diff analysis, AI processing, or AI output display
+- No GitHub API integration, OAuth flows, or webhook endpoints
+- No `ChangeRepository`, `ChangePullRequest`, `ChangeSyncRun`, or any provider entity
+- No `change_requirements`, `change_risk_findings`, `change_generated_test_cases`, or `change_playwright_proposals` tables
+- No analysis submission form or result display UI (M3 scope)
+- No modification to existing QA Center routes, tables, or API contracts
+- No `trigger_type = 'webhook'` value set by any M2 code path
+
+### Database changes
+
+New tables via `030_change_intelligence.sql`:
+- `change_analyses` (17 columns including nullable M3 result columns)
+- `change_analysis_inputs` (9 columns)
+
+See `milestones/m2-analysis-persistence-foundation.md` for the full schema specification.
+
+### Acceptance criteria
+
+See `acceptance-criteria.md` M2-AC-01 through M2-AC-36.
+
+### Regression requirement
+Run full regression smoke test of all existing workflows before merging.
+
+---
+
+## Milestone 3 — Manual Input Analysis
+
+**Goal:** Accept pasted requirement text and PR diff, run AI analysis, and save a completed analysis record.
 
 ### Work items
 
 - [ ] Input form: requirement source type selector and text area
 - [ ] Input form: PR diff text area
-- [ ] API endpoint: `POST /api/change-intelligence/analyses`
+- [ ] Trigger AI analysis on a `ready` analysis record
 - [ ] Server-side validation of inputs
 - [ ] AI workflow: requirement extraction module
 - [ ] AI workflow: diff analysis module
 - [ ] Output: change summary
 - [ ] Output: extracted requirement list
-- [ ] Save draft analysis record to database (new table — schema to be defined based on M0 findings)
+- [ ] Update analysis record with AI results (status → completed or failed)
 - [ ] Display analysis result page
 - [ ] All AI outputs show evidence, confidence, and uncertainty labels
 
 ### Database changes
-New tables via `030_change_intelligence.sql` (additive migration — introduces `change_analyses`, `change_analysis_inputs`, `change_requirements`). See `data-model.md` for schema.
+Introduces `change_requirements` table via an additive migration. See `data-model.md` for schema.
 
 ### Does not include
 - GitHub API integration
-- Requirement-to-implementation comparison (Milestone 3)
-- Risk analysis (Milestone 4)
-- Test generation (Milestone 5)
+- Requirement-to-implementation comparison (Milestone 4)
+- Risk analysis (Milestone 5)
+- Test generation (Milestone 6)
 
 ### Acceptance criteria
 
 ```
-Given a user pastes requirement text and a PR diff
-When they submit the form
-Then QA Center runs the analysis and displays a change summary
+Given an analysis is in ready status with at least one pr_diff and one requirement input
+When the user triggers analysis
+Then QA Center runs the AI pipeline and displays a change summary
 And extracted requirements are listed
-And the analysis is saved as a draft record
+And the analysis record status transitions to completed
 And all AI conclusions show evidence and confidence
 ```
 
 ```
 Given the AI call fails
-When the user submits the form
-Then an error is displayed
+When the user triggers analysis
+Then an error is displayed and the analysis status transitions to failed
 And the failure does not affect any other QA Center page
 ```
 
@@ -157,7 +222,7 @@ Run full regression smoke test of all existing workflows before merging.
 
 ---
 
-## Milestone 3 — Requirement Comparison
+## Milestone 4 — Requirement Comparison
 
 **Goal:** Map extracted requirements to implementation evidence and classify each requirement's coverage status.
 
@@ -191,7 +256,7 @@ Run full regression smoke test of all existing workflows before merging.
 
 ---
 
-## Milestone 4 — Risk and Regression Analysis
+## Milestone 5 — Risk and Regression Analysis
 
 **Goal:** Identify impacted product areas, classify risks, and produce regression recommendations.
 
@@ -226,7 +291,7 @@ Run full regression smoke test of all existing workflows before merging.
 
 ---
 
-## Milestone 5 — Manual Test Generation
+## Milestone 6 — Manual Test Generation
 
 **Goal:** Generate proposed manual test cases from the analysis and route them through the existing review workflow.
 
@@ -256,11 +321,11 @@ And the existing test-case CRUD workflow continues to work for the imported case
 ```
 
 ### Regression requirement
-Run full regression smoke test of all existing workflows, with special focus on the AI Studio review and import flow. Milestone 5 must not break AI Studio.
+Run full regression smoke test of all existing workflows, with special focus on the AI Studio review and import flow. Milestone 6 must not break AI Studio.
 
 ---
 
-## Milestone 6 — Playwright Proposals
+## Milestone 7 — Playwright Proposals
 
 **Goal:** Generate reviewable Playwright test proposals based on the analysis.
 
@@ -287,7 +352,7 @@ Run full regression smoke test of all existing workflows before merging.
 
 ---
 
-## Milestone 7 — Existing Context Integration
+## Milestone 8 — Existing Context Integration
 
 **Goal:** Allow optional use of existing QA Center data to improve analysis quality.
 
@@ -321,7 +386,47 @@ Run full regression smoke test of all existing workflows before merging.
 
 ---
 
-## Milestone 8 — Persistence and Auditability
+## Milestone 9 — Repository and Provider Foundation
+
+[FUTURE] — Not planned until M8 is complete and pilot demand is confirmed.
+
+**Goal:** Introduce the database tables and API endpoints that model source control repositories and pull request objects, enabling future automated PR ingestion.
+
+**Status:** [FUTURE] — Blocked on M13 pilot findings.
+
+This milestone introduces `change_repositories`, `change_pull_requests`, and provider credential infrastructure. It does not implement GitHub API calls. It is the schema foundation for M10.
+
+No M9 work begins without a written decision record in `decisions.md`.
+
+---
+
+## Milestone 10 — GitHub Connection and Manual Synchronization
+
+[FUTURE] — Not planned until M9 is complete.
+
+**Goal:** Allow users to connect a GitHub repository and manually trigger synchronization of a specific pull request, populating the PR object and pre-filling the analysis inputs.
+
+**Status:** [FUTURE] — Blocked on M9.
+
+This milestone introduces GitHub OAuth, repository connection settings, and the manual "fetch PR" action. It does not introduce automated webhooks.
+
+No M10 work begins without a written decision record in `decisions.md`.
+
+---
+
+## Milestone 11 — Automated Synchronization and Webhooks
+
+[FUTURE] — Not planned until M10 is complete.
+
+**Goal:** Automatically ingest PRs from connected repositories via GitHub webhooks, removing the need for users to manually trigger synchronization.
+
+**Status:** [FUTURE] — Blocked on M10.
+
+No M11 work begins without a written decision record in `decisions.md`.
+
+---
+
+## Milestone 12 — Persistence and Auditability
 
 **Goal:** Ensure every analysis is fully auditable.
 
@@ -329,7 +434,7 @@ Run full regression smoke test of all existing workflows before merging.
 
 Each saved analysis record must include:
 
-- [ ] Analysis input (requirement sources, diff content — storage and redaction policy to be decided in M0)
+- [ ] Analysis input (requirement sources, diff content — storage and redaction policy to be decided before this milestone)
 - [ ] Analysis output (all structured findings)
 - [ ] AI model identifier used
 - [ ] Prompt or workflow version used
@@ -352,7 +457,7 @@ Run full regression smoke test of all existing workflows before merging.
 
 ---
 
-## Milestone 9 — Controlled Team Pilot
+## Milestone 13 — Controlled Team Pilot
 
 **Goal:** Enable Change Intelligence for a small internal group and measure outcomes.
 
@@ -368,7 +473,7 @@ Run full regression smoke test of all existing workflows before merging.
   - User trust score
 - [ ] Weekly review of pilot findings
 - [ ] Bug fixing based on pilot feedback
-- [ ] Document findings that inform Milestone 10 decisions
+- [ ] Document findings that inform Milestone 14 decisions
 
 ### Acceptance criteria
 
@@ -389,7 +494,7 @@ Maintain regression coverage throughout the pilot period.
 
 ---
 
-## Milestone 10 — Expansion Decisions
+## Milestone 14 — Expansion Decisions
 
 **Goal:** Based on pilot data, decide which capabilities to build next.
 
@@ -397,14 +502,14 @@ Candidates (all deferred until pilot data exists — none are commitments):
 
 | Candidate | Depends On |
 |-----------|-----------|
-| GitHub API integration (auto-fetch PR diffs) | Pilot demand |
-| Jira auto-linking (auto-fetch story from PR branch name) | Pilot demand |
+| GitHub API integration — auto-fetch PR diffs (M9–M11 path) | Pilot demand |
+| Jira auto-linking — auto-fetch story from PR branch name | Pilot demand |
 | MCP tools (analyze_change, get_change_analysis, etc.) | Pilot demand |
 | Development Gate integration (surface findings in Gate 3/4) | Pilot demand |
 | Release Report aggregation (change-level findings in release reports) | Pilot demand |
 | Repository-aware automation generation (read test file structure) | Pilot demand |
 
-No Milestone 10 work begins without a written decision record in `decisions.md`.
+No Milestone 14 work begins without a written decision record in `decisions.md`.
 
 ---
 

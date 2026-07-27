@@ -33,16 +33,21 @@ See [`phase-1.md`](phase-1.md) for detailed scope.
 | # | Milestone | Status |
 |---|-----------|--------|
 | M0 | Existing System Discovery | COMPLETE — 2026-07-26 |
-| — | Blueprint Reconciliation | IN PROGRESS — 2026-07-26 |
-| M1 | Isolated Feature Shell | NEXT — blocked on reconciliation approval |
-| M2 | Manual Input Analysis | [OPEN] |
-| M3 | Requirement Comparison | [OPEN] |
-| M4 | Risk and Regression Analysis | [OPEN] |
-| M5 | Manual Test Generation | [OPEN] |
-| M6 | Playwright Proposals | [OPEN] |
-| M7 | Existing Context Integration | [OPEN] |
-| M8 | Persistence and Auditability | [OPEN] |
-| M9 | Controlled Team Pilot | [OPEN] |
+| — | Blueprint Reconciliation | COMPLETE — 2026-07-27 |
+| M1 | Isolated Feature Shell | COMPLETE |
+| M2 | Analysis Persistence Foundation | Specification Complete — Ready for Implementation |
+| M3 | Manual Input Analysis | [OPEN] |
+| M4 | Requirement Comparison | [OPEN] |
+| M5 | Risk and Regression Analysis | [OPEN] |
+| M6 | Manual Test Generation | [OPEN] |
+| M7 | Playwright Proposals | [OPEN] |
+| M8 | Existing Context Integration | [OPEN] |
+| M9 | Repository and Provider Foundation | [FUTURE] — blocked on M13 pilot findings |
+| M10 | GitHub Connection and Manual Synchronization | [FUTURE] — blocked on M9 |
+| M11 | Automated Synchronization and Webhooks | [FUTURE] — blocked on M10 |
+| M12 | Persistence and Auditability | [OPEN] |
+| M13 | Controlled Team Pilot | [OPEN] |
+| M14 | Expansion Decisions | [OPEN] |
 
 **Key constraint:** Nothing in Phase 1 removes, renames, or modifies existing QA Center capabilities.
 

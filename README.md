@@ -29,12 +29,12 @@ This repository is the **single source of truth** for the QA Center product — 
 | Field | Value |
 |-------|-------|
 | **Product Status** | Active Development |
-| **Blueprint Version** | v0.5.0 |
+| **Blueprint Version** | v0.6.0 |
 | **Implementation Version** | — *(see [qa-center](../qa-center))* |
 | **Current Phase** | Phase 1 — Change Intelligence Foundation |
-| **Current Milestone** | M2 — Database Schema & Persistence |
-| **Current Sprint** | Change Intelligence · AI Analysis Pipeline |
-| **Current Focus** | Building the core analysis submission flow and AI processing pipeline |
+| **Current Milestone** | M2 — Analysis Persistence Foundation |
+| **Current Sprint** | Change Intelligence · Analysis Persistence |
+| **Current Focus** | M2 specification complete — persistence layer, API contracts, and draft/ready lifecycle ready for implementation |
 | **Last Updated** | 2026-07-27 |
 
 ---
@@ -51,7 +51,7 @@ Development Gates          █████████████████�
 AI Studio                  ████████████████████  Live in production
 MCP Server                 ████████████████████  Live in production
 ───────────────────────────────────────────────────────────────────
-Change Intelligence        ████░░░░░░░░░░░░░░░░  M1 ✅  M2 🔄  M3–M9 ⬜
+Change Intelligence        ████░░░░░░░░░░░░░░░░  M1 ✅  M2 📋  M3–M14 ⬜
 Release Intelligence       ░░░░░░░░░░░░░░░░░░░░  Phase 2 — not started
 AI Test Generation         ░░░░░░░░░░░░░░░░░░░░  Phase 2 — not started
 AI Agents                  ░░░░░░░░░░░░░░░░░░░░  Phase 3 — not started
@@ -70,7 +70,7 @@ Overall QA Center Platform ████████░░░░░░░░░�
 | Development Gates | Baseline | — | ✅ Live |
 | AI Studio | Baseline | — | ✅ Live |
 | MCP Server | Baseline | — | ✅ Live |
-| Change Intelligence | Phase 1 | M0 ✅ · M1 ✅ · M2 🔄 · M3–M9 ⬜ | 🔄 Active |
+| Change Intelligence | Phase 1 | M0 ✅ · M1 ✅ · M2 📋 · M3–M14 ⬜ | 🔄 Active |
 | Release Intelligence | Phase 2 | — | ⬜ Planned |
 | AI Test Generation | Phase 2 | — | ⬜ Planned |
 | AI Agents | Phase 3 | — | ⬜ Planned |
@@ -206,7 +206,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full contribution guidelines.
 | Baseline | Development Gates | ✅ Complete |
 | Baseline | AI Studio | ✅ Complete |
 | Baseline | MCP Server | ✅ Complete |
-| **Phase 1** | **Change Intelligence** | 🔄 **Active — M2 in progress** |
+| **Phase 1** | **Change Intelligence** | 🔄 **Active — M2 specification complete** |
 | Phase 2 | Release Intelligence | ⬜ Planned |
 | Phase 2 | AI Test Generation | ⬜ Planned |
 | Phase 3 | Autonomous QA Agents | ⬜ Planned |
@@ -217,46 +217,50 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full contribution guidelines.
 
 ## Current Milestone
 
-### M2 — Database Schema & Persistence
+### M2 — Analysis Persistence Foundation
 **Feature:** Change Intelligence · **Phase:** 1
 
 #### Objective
-Introduce the first Change Intelligence database tables and build the core analysis submission flow: a user submits a PR diff and requirement text, the AI processes them synchronously, and the structured results are saved and returned.
+Introduce the first Change Intelligence database tables and the API layer for managing analysis records. M2 is a pure persistence and lifecycle milestone — no AI processing occurs. It establishes the draft/ready lifecycle, input management, and the six API endpoints that the M3 analysis pipeline will build on top of.
 
 #### Completed Work
 
 | Item | Status |
 |------|--------|
 | Architecture discovery (M0) — all application conventions confirmed | ✅ Done |
-| Feature 0001 blueprint — all 10 documents authored | ✅ Done |
-| Blueprint reconciliation — 10 decisions approved, all open questions resolved | ✅ Done |
+| Feature 0001 blueprint — 10 core documents authored | ✅ Done |
+| Blueprint reconciliation — 17 decisions approved, all open questions resolved | ✅ Done |
 | M1 Feature Shell — feature flag, navigation item, empty-state page | ✅ Done |
+| M2 specification — full milestone spec with 37 sections, 36 acceptance criteria, 5 new decisions | ✅ Done |
 
 #### Remaining Work
 
 | Item | Priority |
 |------|---------|
-| Define pre-M2 AI constraints (token limits, truncation, timeout behavior) | Must-do before M2 ships |
-| Database migration `030_change_intelligence.sql` | M2 |
-| `POST /api/change-intelligence/analyses` — input validation, AI call, persistence | M2 |
-| `GET /api/change-intelligence/analyses` and `GET .../analyses/:id` | M2 |
-| Analysis input form at `/change-intelligence` | M2 |
-| API test coverage (Change Intelligence is the first feature with API tests) | M2 |
+| Database migration `030_change_intelligence.sql` (`change_analyses`, `change_analysis_inputs`) | M2 |
+| `GET /api/change-intelligence/analyses` — paginated list (no content) | M2 |
+| `POST /api/change-intelligence/analyses` — create draft record | M2 |
+| `GET /api/change-intelligence/analyses/:id` — retrieve with input metadata (no content) | M2 |
+| `PATCH /api/change-intelligence/analyses/:id` — update title or transition status | M2 |
+| `POST /api/change-intelligence/analyses/:id/inputs` — add input to draft | M2 |
+| `DELETE /api/change-intelligence/analyses/:id/inputs/:inputId` — remove input from draft | M2 |
+| API test coverage — all 6 endpoints × happy path + error cases | M2 |
 | Full regression smoke test across all existing workflows | M2 |
 
 #### Success Criteria
-- A user can paste a PR diff and requirement text and submit an analysis
-- The AI processes the inputs synchronously and returns a structured result
-- The analysis is persisted and retrievable via `GET /api/change-intelligence/analyses/:id`
+- A draft analysis record can be created, updated, and retrieved
+- Inputs can be attached to and removed from draft analyses
+- Inputs are locked when the analysis is promoted to ready
+- All GET endpoints exclude input content from responses
+- All 36 M2 acceptance criteria pass
 - All existing QA Center features continue to operate without regression
-- All 18 M2 acceptance criteria pass
 
 #### Dependencies
-- Pre-M2 AI constraints defined and documented in `ai-workflow.md`
+- M1 complete (feature flag and `isChangeIntelligenceEnabled()` available) ✅
 - Migration tested against a copy of the production schema before merge
 
 #### Next Milestone After M2
-M3 — AI Analysis Engine (requirement extraction, coverage status, evidence, confidence)
+M3 — Manual Input Analysis (UI form, AI pipeline, analysis result display)
 
 ---
 
@@ -293,9 +297,10 @@ Every specification, architectural document, and reference for the QA Center pla
 | Decisions | [`product/features/0001-change-intelligence/decisions.md`](product/features/0001-change-intelligence/decisions.md) | D-001–D-017 approved decisions; open and deferred decisions |
 | Data Model | [`product/features/0001-change-intelligence/data-model.md`](product/features/0001-change-intelligence/data-model.md) | Proposed table schemas, FK conventions, import path |
 | API Design | [`product/features/0001-change-intelligence/api-design.md`](product/features/0001-change-intelligence/api-design.md) | Endpoint contracts, response envelope, auth pattern |
-| Acceptance Criteria | [`product/features/0001-change-intelligence/acceptance-criteria.md`](product/features/0001-change-intelligence/acceptance-criteria.md) | BC-01–BC-15 backward compatibility; M1-AC-01–M1-AC-18 |
-| AI Workflow | [`product/features/0001-change-intelligence/ai-workflow.md`](product/features/0001-change-intelligence/ai-workflow.md) | 8 AI stages, synchronous constraints, pre-M2 requirements |
+| Acceptance Criteria | [`product/features/0001-change-intelligence/acceptance-criteria.md`](product/features/0001-change-intelligence/acceptance-criteria.md) | BC-01–BC-15 backward compatibility; M1-AC-01–M1-AC-18; M2-AC-01–M2-AC-36 |
+| AI Workflow | [`product/features/0001-change-intelligence/ai-workflow.md`](product/features/0001-change-intelligence/ai-workflow.md) | 8 AI stages, synchronous constraints, pre-M3 requirements |
 | User Experience | [`product/features/0001-change-intelligence/user-experience.md`](product/features/0001-change-intelligence/user-experience.md) | Personas, user journeys, M1 shell spec, accessibility |
+| M2 Specification | [`product/features/0001-change-intelligence/milestones/m2-analysis-persistence-foundation.md`](product/features/0001-change-intelligence/milestones/m2-analysis-persistence-foundation.md) | Full M2 milestone spec — schema, lifecycle, 6 API endpoints, 36 acceptance criteria |
 
 ### Architecture
 
@@ -371,27 +376,33 @@ A milestone is not complete until every criterion below is satisfied.
 | 2026-07-26 | Milestone 0 complete — full architecture discovery of the production application |
 | 2026-07-27 | Blueprint reconciliation complete — 10 decisions approved, all open questions resolved |
 | 2026-07-27 | Milestone 1 complete — feature shell live with flag, navigation, and empty-state page |
+| 2026-07-27 | M2 specification complete — Analysis Persistence Foundation fully specified with 37 sections, 36 acceptance criteria, 5 new decisions (D-018–D-022), and updated milestone sequence M2–M14 |
 
 ---
 
 ## Next Milestone
 
-### M2 — Database Schema & Persistence
+### M2 — Analysis Persistence Foundation
 
-**Objective:** Introduce the first Change Intelligence database tables and deliver an end-to-end analysis flow — from user input through AI processing to a saved, retrievable result.
+**Objective:** Implement the database schema and API layer for managing Change Intelligence analysis records. This milestone introduces the draft/ready lifecycle, input management, and the persistence surface that M3 will build on. No AI processing occurs in M2.
+
+**Specification:** [`product/features/0001-change-intelligence/milestones/m2-analysis-persistence-foundation.md`](product/features/0001-change-intelligence/milestones/m2-analysis-persistence-foundation.md)
 
 **Key deliverables:**
 
 | Deliverable | Description |
 |-------------|-------------|
-| `030_change_intelligence.sql` | Additive database migration introducing `change_analyses`, `change_analysis_inputs`, and `change_requirements` |
-| Analysis submission endpoint | `POST /api/change-intelligence/analyses` — validates input, calls AI, persists structured output |
-| Analysis retrieval endpoints | `GET /api/change-intelligence/analyses` and `GET .../analyses/:id` |
-| Analysis input form | UI at `/change-intelligence` for submitting diff and requirement text |
-| API test coverage | First feature in the application with API-level test coverage |
+| `030_change_intelligence.sql` | Additive migration introducing `change_analyses` (17 columns) and `change_analysis_inputs` (9 columns) with indexes and check constraints |
+| `GET /api/change-intelligence/analyses` | Paginated list — excludes input content |
+| `POST /api/change-intelligence/analyses` | Create draft analysis record |
+| `GET /api/change-intelligence/analyses/:id` | Retrieve analysis with input metadata — excludes content |
+| `PATCH /api/change-intelligence/analyses/:id` | Update title or transition status (draft → ready → cancelled) |
+| `POST /api/change-intelligence/analyses/:id/inputs` | Add input to draft analysis (500,000 char limit, content_hash) |
+| `DELETE /api/change-intelligence/analyses/:id/inputs/:inputId` | Remove input from draft analysis |
+| API test coverage | All 6 endpoints × happy path and error cases |
 | Regression verification | Full smoke test of all existing QA Center workflows |
 
-**Expected outcome:** A QA engineer can paste a PR diff and requirement text, submit an analysis, and receive a structured comparison with extracted requirements and coverage status — all saved and retrievable.
+**Expected outcome:** A QA engineer can create a draft analysis, attach a PR diff and requirement documents, promote the analysis to ready, and retrieve the record later — all without any AI processing occurring.
 
 ---
 
@@ -416,4 +427,4 @@ The goal is not to replace QA engineers. It is to give them the leverage of an e
 
 ---
 
-<sub>QA Center Blueprint · v0.5.0 · Blueprint-first Development · MIT License</sub>
+<sub>QA Center Blueprint · v0.6.0 · Blueprint-first Development · MIT License</sub>

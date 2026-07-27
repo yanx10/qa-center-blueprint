@@ -394,43 +394,497 @@ And no Change Intelligence content is revealed
 
 ---
 
-### Milestone 2 — Manual Input Analysis
+### Milestone 2 — Analysis Persistence Foundation
 
-#### M2-AC-01 — Analysis submits and produces output
-
-```
-Given a user provides at least one requirement source and one PR diff
-When they submit the analysis form
-Then a change summary is displayed
-And a list of extracted requirements is displayed
-And each requirement shows evidence and confidence
-And the analysis is saved as a record accessible via GET /api/change-intelligence/analyses/:id
-```
-
-#### M2-AC-02 — Missing required inputs are rejected
+#### M2-AC-01 — All M2 API routes return 403 when feature is disabled
 
 ```
-Given a user submits the form without a PR diff
-Or without any requirement source
-When the request reaches the API
-Then a 400 response is returned with a descriptive error
+Given CHANGE_INTELLIGENCE_ENABLED is not set
+When any unauthenticated or authenticated user calls any M2 endpoint
+Then the response is 403
+And the body is { "success": false, "error": "Change Intelligence is not enabled." }
+And no database query is executed
+```
+
+#### M2-AC-02 — All M2 API routes call requireAuth() before any business logic
+
+```
+Given any M2 route handler
+When the handler processes a request with the feature enabled
+Then it calls requireAuth() at the top of the handler, after the feature gate check
+And it returns a 401 errorResponse if authentication fails
+And it does not proceed to any database access without a valid session
+```
+
+#### M2-AC-03 — Unauthenticated requests to M2 routes return 401
+
+```
+Given CHANGE_INTELLIGENCE_ENABLED is set
+And the request has no valid session
+When any M2 endpoint is called
+Then the response is 401
+And the body is { "success": false, "error": "Authentication required." }
+```
+
+#### M2-AC-04 — POST /analyses creates a draft analysis with default values
+
+```
+Given an authenticated user calls POST /api/change-intelligence/analyses with an empty body
+When the request is processed
+Then a new change_analyses record is created with status 'draft' and trigger_type 'manual'
+And created_by is set to the authenticated user's UUID
+And the response title is a non-null auto-generated string in the format "Change Analysis — [Month Day, Year H:MM AM/PM]"
+And the response status is 201
+And the response body includes { "success": true, "data": { "id": "...", "status": "draft", "title": "..." } }
+```
+
+#### M2-AC-05 — POST /analyses with title stores the title
+
+```
+Given an authenticated user calls POST /api/change-intelligence/analyses with { "title": "Sprint 42 auth refactor" }
+When the request is processed
+Then the new record has title = 'Sprint 42 auth refactor'
+And the response data includes the title field
+```
+
+#### M2-AC-06 — POST /analyses with project_id associates the analysis with a project
+
+```
+Given an authenticated user calls POST /api/change-intelligence/analyses with a valid project_id
+When the request is processed
+Then the new record has project_id set to the provided UUID
+And the response data includes the project_id field
+```
+
+#### M2-AC-07 — POST /analyses with release_id associates the analysis with a release
+
+```
+Given an authenticated user calls POST /api/change-intelligence/analyses with a valid release_id
+When the request is processed
+Then the new record has release_id set to the provided UUID
+And the response data includes the release_id field
+```
+
+#### M2-AC-08 — POST /analyses with a nonexistent project_id returns 400
+
+```
+Given an authenticated user calls POST /api/change-intelligence/analyses
+With a project_id UUID that does not reference an existing project
+When the request is processed
+Then the response is 400
+And the body is { "success": false, "error": "..." }
 And no analysis record is created
 ```
 
-#### M2-AC-03 — AI failure is isolated
+#### M2-AC-09 — POST /analyses uses the standard response envelope
+
+```
+Given any successful POST /api/change-intelligence/analyses request
+When the response is received
+Then the body matches { "success": true, "data": { ... } }
+And on failure the body matches { "success": false, "error": "..." }
+```
+
+#### M2-AC-10 — POST /analyses does not make any Anthropic API call
+
+```
+Given any POST /api/change-intelligence/analyses request
+When the request is processed
+Then no call is made to generateStructuredAIResponse or any Anthropic API
+And lib/ai/anthropic.ts is not imported by any M2 route file
+```
+
+#### M2-AC-11 — POST /analyses response does not include input content
+
+```
+Given a POST /api/change-intelligence/analyses call succeeds
+Then the response data does not include a content field
+And the response data does not include a prd_snapshot field
+```
+
+#### M2-AC-12 — GET /analyses returns a paginated list
+
+```
+Given at least one analysis exists
+When an authenticated user calls GET /api/change-intelligence/analyses
+Then the response is 200
+And the response data includes an analyses array and a pagination object
+And the analyses array contains at most 25 records per page by default
+```
+
+#### M2-AC-13 — GET /analyses list excludes input content
+
+```
+Given analyses with attached inputs exist
+When GET /api/change-intelligence/analyses is called
+Then each analysis object in the array does not include a content field on any input
+And each analysis object includes input_count (the number of attached inputs)
+```
+
+#### M2-AC-14 — GET /analyses page and limit parameters are respected
+
+```
+Given more than 25 analyses exist
+When GET /api/change-intelligence/analyses?page=2&limit=5 is called
+Then the response contains at most 5 analyses
+And the pagination object shows page=2 and limit=5
+```
+
+#### M2-AC-15 — GET /analyses returns an empty array when no analyses exist
+
+```
+Given no analyses have been created
+When GET /api/change-intelligence/analyses is called
+Then the response is 200
+And data.analyses is an empty array
+And data.pagination.total is 0
+```
+
+#### M2-AC-16 — GET /analyses/:id returns the full analysis record
+
+```
+Given a draft analysis with an ID exists
+When GET /api/change-intelligence/analyses/:id is called with that ID
+Then the response is 200
+And the data object includes all analysis metadata fields
+And the data object includes an inputs array
+```
+
+#### M2-AC-17 — GET /analyses/:id excludes input content
+
+```
+Given an analysis with inputs exists
+When GET /api/change-intelligence/analyses/:id is called
+Then each object in the inputs array does not include a content field
+And each object does not include a prd_snapshot field
+And each object does include content_hash, input_type, source_label, and created_at
+```
+
+#### M2-AC-18 — GET /analyses/:id returns 404 for a nonexistent ID
+
+```
+Given a UUID that does not reference any analysis
+When GET /api/change-intelligence/analyses/:id is called
+Then the response is 404
+And the body is { "success": false, "error": "Analysis not found." }
+```
+
+#### M2-AC-19 — GET /analyses/:id returns M3 result fields as null for M2-lifecycle records
+
+```
+Given a draft or ready analysis (M3 pipeline has not run)
+When GET /api/change-intelligence/analyses/:id is called
+Then ai_model, change_summary, requirement_summary, error_code, error_message,
+  started_at, and completed_at are all null in the response
+```
+
+#### M2-AC-20 — PATCH /analyses/:id can update title when status is draft
+
+```
+Given a draft analysis
+When PATCH /api/change-intelligence/analyses/:id is called with { "title": "New title" }
+Then the response is 200
+And the analysis title is updated to "New title"
+And updated_at is updated to the current time
+```
+
+#### M2-AC-21 — PATCH /analyses/:id can transition status to ready when pr_diff input exists
+
+```
+Given a draft analysis that has at least one input with input_type 'pr_diff'
+When PATCH /api/change-intelligence/analyses/:id is called with { "status": "ready" }
+Then the response is 200
+And the analysis status transitions to 'ready'
+```
+
+#### M2-AC-22 — PATCH /analyses/:id transition to ready fails without a pr_diff input
+
+```
+Given a draft analysis with no inputs, or with only requirement-type inputs
+When PATCH /api/change-intelligence/analyses/:id is called with { "status": "ready" }
+Then the response is 400
+And the body contains an error explaining that a pr_diff input is required
+And the analysis remains in draft status
+```
+
+#### M2-AC-23 — PATCH /analyses/:id on a ready analysis returns 409 for status changes back to draft
+
+```
+Given an analysis in ready status
+When PATCH /api/change-intelligence/analyses/:id is called with { "status": "draft" }
+Then the response is 409
+And the analysis status remains ready
+```
+
+#### M2-AC-24 — PATCH /analyses/:id updates updated_at on every successful write
+
+```
+Given any successful PATCH /api/change-intelligence/analyses/:id request
+When the response is received
+Then the data.updated_at value is newer than the previous updated_at value
+```
+
+#### M2-AC-25 — POST /analyses/:id/inputs adds an input to a draft analysis
+
+```
+Given a draft analysis
+When POST /api/change-intelligence/analyses/:id/inputs is called
+  with { "input_type": "requirement_text", "content": "As a user..." }
+Then the response is 201
+And a new change_analysis_inputs record is created for the analysis
+And the response data includes id, input_type, content_hash, and created_at
+And the response data does not include the content field
+```
+
+#### M2-AC-26 — POST /analyses/:id/inputs fails with 409 when analysis is not draft
+
+```
+Given an analysis in ready, processing, completed, failed, or cancelled status
+When POST /api/change-intelligence/analyses/:id/inputs is called
+Then the response is 409
+And the body contains an error explaining that inputs cannot be modified in the current status
+And no input record is created
+```
+
+#### M2-AC-27 — POST /analyses/:id/inputs computes content_hash server-side with canonicalization
+
+```
+Given POST /api/change-intelligence/analyses/:id/inputs is called with content "diff --git a/..."
+When the input is stored
+Then content_hash is set to the SHA-256 of the canonicalized content:
+  remove UTF-8 BOM, normalize CRLF→LF, preserve other whitespace, encode as UTF-8, SHA-256, 64 lowercase hex characters
+And content_hash is not accepted from the request body — the client cannot override it
+And the stored hash is exactly 64 lowercase hexadecimal characters with no algorithm prefix
+```
+
+#### M2-AC-28 — POST /analyses/:id/inputs rejects unknown input_type values
+
+```
+Given POST /api/change-intelligence/analyses/:id/inputs is called with input_type "github_link"
+When the request is processed
+Then the response is 400
+And the body contains an error listing the allowed input_type values
+And no input record is created
+```
+
+#### M2-AC-29 — POST /analyses/:id/inputs rejects content exceeding 500,000 characters
+
+```
+Given POST /api/change-intelligence/analyses/:id/inputs is called
+  with content containing more than 500,000 characters
+When the request is processed
+Then the response is 400
+And the body is { "success": false, "error": "Content exceeds the 500,000 character limit." }
+And no input record is created
+```
+
+#### M2-AC-30 — DELETE /analyses/:id/inputs/:inputId removes the input from a draft analysis
+
+```
+Given a draft analysis with an input identified by inputId
+When DELETE /api/change-intelligence/analyses/:id/inputs/:inputId is called
+Then the response is 200
+And the input record is deleted from change_analysis_inputs
+And the response body is { "success": true, "data": { "deleted": true, "id": "..." } }
+```
+
+#### M2-AC-31 — DELETE /analyses/:id/inputs/:inputId fails with 409 when analysis is not draft
+
+```
+Given an analysis in ready status with an input
+When DELETE /api/change-intelligence/analyses/:id/inputs/:inputId is called
+Then the response is 409
+And the input record is not deleted
+```
+
+#### M2-AC-32 — DELETE /analyses/:id/inputs/:inputId returns 404 when input does not belong to analysis
+
+```
+Given inputId is a valid UUID that exists in change_analysis_inputs
+But it belongs to a different analysis, not the one in the URL path
+When DELETE /api/change-intelligence/analyses/:id/inputs/:inputId is called
+Then the response is 404 (not 403)
+And no record is deleted
+```
+
+#### M2-AC-33 — Migration creates both tables with all specified columns
+
+```
+Given 030_change_intelligence.sql has been applied
+When the database schema is inspected
+Then change_analyses exists with all 17 columns and check constraints on status and trigger_type
+And change_analysis_inputs exists with all 9 columns and check constraint on input_type
+And all 7 indexes are present
+And no existing table has been modified
+```
+
+#### M2-AC-34 — Migration is idempotent
+
+```
+Given 030_change_intelligence.sql has already been applied
+When the migration is applied a second time
+Then no error is raised
+And all tables, indexes, and constraints remain unchanged
+```
+
+#### M2-AC-35 — Deleting an analysis cascades to delete all its inputs
+
+```
+Given an analysis with three attached inputs
+When the analysis record is deleted from change_analyses
+Then all three input records are automatically deleted from change_analysis_inputs
+And no orphaned input records remain
+```
+
+#### M2-AC-36 — Posting a second pr_diff to a draft analysis replaces the existing one
+
+```
+Given a draft analysis that already has one input with input_type 'pr_diff'
+When POST /api/change-intelligence/analyses/:id/inputs is called
+  with another input of input_type 'pr_diff' and new content
+Then the existing pr_diff input is replaced (not duplicated)
+And the analysis has exactly one input with input_type 'pr_diff'
+And the content_hash of the remaining input reflects the new content (canonicalized)
+And the response is 200 (not 201, since the input was replaced)
+```
+
+#### M2-AC-37 — Auto-generated title is non-null when no title is provided
+
+```
+Given a POST /api/change-intelligence/analyses request with no title field
+When the analysis is created
+Then the response title is a non-null string
+And the format matches "Change Analysis — [Month Day, Year H:MM AM/PM]"
+And the stored change_analyses record has a NOT NULL title value
+```
+
+#### M2-AC-38 — Title cannot be cleared via PATCH
+
+```
+Given a draft analysis with a title
+When PATCH /api/change-intelligence/analyses/:id is called with { "title": "" }
+Then the response is 400
+And the error body matches { "success": false, "error": "..." }
+And the title in the database is unchanged
+```
+
+#### M2-AC-39 — createdBy filter narrows results without gating authorization
+
+```
+Given analyses exist created by user A and user B
+When user A calls GET /api/change-intelligence/analyses?created_by=<user-A-uuid>
+Then only user A's analyses are returned
+When user A calls GET /api/change-intelligence/analyses?created_by=<user-B-uuid>
+Then user B's analyses are returned (created_by filter is not an authorization boundary in M2)
+```
+
+#### M2-AC-40 — Secondary sort by id ensures deterministic ordering
+
+```
+Given two analyses have the same updated_at timestamp
+When GET /api/change-intelligence/analyses is called
+Then the two analyses appear in a consistent order (id DESC as secondary sort key)
+And repeating the identical request returns the same order
+```
+
+#### M2-AC-41 — Default page size is 25
+
+```
+Given 30 analyses exist
+When GET /api/change-intelligence/analyses is called with no limit parameter
+Then the response contains 25 analyses
+And data.pagination.total is 30
+And data.pagination.limit is 25
+```
+
+#### M2-AC-42 — PR diff replacement is atomic: exactly one pr_diff remains
+
+```
+Given a draft analysis already has a pr_diff input
+When POST /api/change-intelligence/analyses/:id/inputs is called with a new pr_diff
+Then GET /api/change-intelligence/analyses/:id shows exactly one input with input_type 'pr_diff'
+And no orphaned pr_diff rows exist in change_analysis_inputs for that analysis
+```
+
+#### M2-AC-43 — Multiple non-primary inputs of the same type are permitted
+
+```
+Given a draft analysis
+When two POST /api/change-intelligence/analyses/:id/inputs requests are made
+  each with { "input_type": "requirement_text", "content": "..." }
+Then two separate requirement_text input records exist on the analysis
+And GET /api/change-intelligence/analyses/:id shows both inputs
+```
+
+#### M2-AC-44 — Content hash canonicalization: CRLF normalized to LF
+
+```
+Given an input is created with content "Hello\r\nWorld" (CRLF line endings)
+When the input is stored
+Then the stored content_hash equals the SHA-256 of "Hello\nWorld" (LF after normalization)
+And the hash is 64 lowercase hexadecimal characters with no prefix
+```
+
+#### M2-AC-45 — Content hash canonicalization: UTF-8 BOM removed
+
+```
+Given an input is created with content that begins with the UTF-8 BOM (EF BB BF) followed by "Hello"
+When the input is stored
+Then the stored content_hash equals the SHA-256 of "Hello" (BOM stripped before hashing)
+And the hash is 64 lowercase hexadecimal characters
+```
+
+#### M2-AC-46 — Concurrent pr_diff creation returns 409, not 500
+
+```
+Given the database has a partial unique index UNIQUE (analysis_id) WHERE input_type = 'pr_diff'
+And two concurrent POST /inputs requests with input_type 'pr_diff' are sent to the same draft analysis
+Then exactly one succeeds (200 or 201)
+And the other receives HTTP 409 Conflict
+And the error body is { "success": false, "error": "An analysis can have at most one PR diff input. The diff was already added by a concurrent request." }
+And the constraint name, SQL, driver details, or stack trace do not appear in the error body
+And the analysis has exactly one pr_diff input after both requests complete
+```
+
+---
+
+### Milestone 3 — Manual Input Analysis
+
+#### M3-AC-01 — Analysis submits and produces output
+
+```
+Given a ready analysis with at least one pr_diff and one requirement input
+When the user triggers the analysis
+Then a change summary is displayed
+And a list of extracted requirements is displayed
+And each requirement shows evidence and confidence
+And the analysis status transitions to completed
+```
+
+#### M3-AC-02 — Missing required inputs are rejected
+
+```
+Given an analysis with no pr_diff input
+When the user attempts to trigger analysis
+Then an error is shown
+And the analysis is not processed
+```
+
+#### M3-AC-03 — AI failure is isolated
 
 ```
 Given the Anthropic API returns an error during analysis
-When the user is on the analysis submission page
+When the user is on the analysis page
 Then an error message is shown on the Change Intelligence page
+And the analysis status transitions to failed
 And all other QA Center pages are unaffected
 ```
 
 ---
 
-### Milestone 3 — Requirement Comparison
+### Milestone 4 — Requirement Comparison
 
-#### M3-AC-01 — Each requirement has a coverage status
+#### M4-AC-01 — Each requirement has a coverage status
 
 ```
 Given an analysis is complete
@@ -440,7 +894,7 @@ Then every extracted requirement displays one of:
 And every status is supported by evidence
 ```
 
-#### M3-AC-02 — Reviewer can override a status
+#### M4-AC-02 — Reviewer can override a status
 
 ```
 Given a requirement has an AI-assigned coverage status
@@ -451,9 +905,9 @@ And the AI-assigned status is still visible for comparison
 
 ---
 
-### Milestone 4 — Risk and Regression Analysis
+### Milestone 5 — Risk and Regression Analysis
 
-#### M4-AC-01 — Risk findings are displayed with evidence
+#### M5-AC-01 — Risk findings are displayed with evidence
 
 ```
 Given an analysis is complete
@@ -463,7 +917,7 @@ And each finding shows supporting evidence from the diff
 And each finding has a review status
 ```
 
-#### M4-AC-02 — Reviewer can dispute a finding
+#### M5-AC-02 — Reviewer can dispute a finding
 
 ```
 Given a risk finding has review status "unreviewed"
@@ -474,13 +928,13 @@ And the finding is visually distinguished from acknowledged findings
 
 ---
 
-### Milestone 5 — Manual Test Generation
+### Milestone 6 — Manual Test Generation
 
-#### M5-AC-01 — Generated cases require approval before import
+#### M6-AC-01 — Generated cases require approval before import
 
 Covered by BC-11.
 
-#### M5-AC-02 — Approved case import matches existing library format
+#### M6-AC-02 — Approved case import matches existing library format
 
 ```
 Given a generated test case has been approved
@@ -492,9 +946,9 @@ And the import route calls requireAuth() explicitly
 
 ---
 
-### Milestone 6 — Playwright Proposals
+### Milestone 7 — Playwright Proposals
 
-#### M6-AC-01 — Proposals are displayed as readable code
+#### M7-AC-01 — Proposals are displayed as readable code
 
 ```
 Given Playwright proposals have been generated
@@ -504,7 +958,7 @@ And the user can copy the code
 And the framework is labeled "Playwright (TypeScript)"
 ```
 
-#### M6-AC-02 — No code is executed or committed
+#### M7-AC-02 — No code is executed or committed
 
 ```
 Given any number of Playwright proposals have been generated and accepted
@@ -514,9 +968,9 @@ Then no code has been executed, saved to disk, committed to any repository,
 
 ---
 
-### Milestone 9 — Pilot
+### Milestone 13 — Pilot
 
-#### M9-AC-01 — Non-pilot users are unaffected
+#### M13-AC-01 — Non-pilot users are unaffected
 
 ```
 Given the pilot group is enabled

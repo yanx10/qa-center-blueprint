@@ -378,6 +378,136 @@ These decisions are explicitly deferred. They must not be made by assumption. Ea
 
 ---
 
+### D-018 — Analysis lifecycle starts in draft and locks inputs at ready
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** A `change_analyses` record is created with `status = 'draft'`. Inputs can be added to and removed from a draft analysis. When the user promotes the analysis to `status = 'ready'`, inputs are locked — no further additions or deletions are permitted. The AI pipeline (M3) runs only on `ready` analyses.
+
+**Rationale:** The draft/ready split gives users the ability to build up inputs across multiple sessions without accidentally triggering an AI call. Locking inputs at ready ensures the AI sees a stable, consistent set of data and provides a clear moment of user intent before any AI processing begins.
+
+**Consequences:** All six M2 input management API routes enforce the draft/ready boundary. PATCH to `ready` requires at least one `pr_diff` input. Attempts to add or remove inputs from a non-draft analysis return 409. M3 must transition status from `ready` to `processing` atomically before beginning any AI call.
+
+---
+
+### D-019 — Inputs are immutable once the parent analysis leaves draft
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** `change_analysis_inputs` records can only be created or deleted when their parent `change_analyses` record is in `draft` status. Any attempt to add or remove an input from an analysis in `ready`, `processing`, `completed`, `failed`, or `cancelled` status is rejected with 409.
+
+**Rationale:** Immutability after the ready transition ensures that the AI analysis runs against exactly the inputs the user reviewed and approved. Allowing post-ready modifications would create a mismatch between what the user confirmed and what the AI processed, undermining auditability.
+
+**Consequences:** If a user needs to change inputs after promoting to ready, they must cancel the analysis and create a new one. A retry creates a new record (no in-place modification). See D-021.
+
+---
+
+### D-020 — Input content is excluded from all GET API responses
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** The `content` and `prd_snapshot` columns of `change_analysis_inputs` are never returned by any GET API endpoint. Responses include only `id`, `input_type`, `content_hash`, `source_label`, `source_reference`, and `created_at`. Content is stored in the database but is only accessed by the M3 AI pipeline.
+
+**Rationale:** Input content (PR diffs, requirement text) can be large (up to 500,000 characters) and may contain sensitive code or unreleased product information. Excluding content from GET responses reduces bandwidth consumption, prevents accidental exposure in browser developer tools, and clarifies the API contract: content flows in (write), content hash flows out (read).
+
+**Consequences:** API clients cannot retrieve the stored content via GET. If a client needs to verify the stored content, they compare `content_hash` against their locally computed hash. The M3 pipeline reads `content` directly from the database — it does not go through the GET API.
+
+---
+
+### D-021 — A failed or cancelled analysis cannot be retried in place; a new record must be created
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** There is no in-place retry mechanism for `failed` or `cancelled` analyses. The user must create a new `change_analyses` record and attach inputs again. The old record is preserved in its terminal state for audit purposes.
+
+**Rationale:** Allowing in-place retry would require the status machine to permit transitions from `failed` or `cancelled` back to `ready`, which creates complex state and auditability problems. Creating a new record is simple, auditable, and consistent with the immutability principle of D-019.
+
+**Consequences:** The UI should make it easy to copy inputs from a failed or cancelled analysis into a new analysis (M3/UX scope). The old record remains queryable. The `created_by` on the new record will be the authenticated user at the time of retry.
+
+---
+
+### D-022 — Input content is limited to 500,000 characters
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** The `content` field of `change_analysis_inputs` is limited to 500,000 characters. The API rejects any input with `content` exceeding this limit with a 400 response before any database write occurs.
+
+**Rationale:** 500,000 characters is approximately 125,000 tokens — well within Anthropic's context limits while preventing pathological inputs that could cause excessive latency or cost. The limit provides a clear, enforceable contract for both the API and the AI pipeline. See also OD-010 (large-diff chunking algorithm, deferred).
+
+**Consequences:** Users with diffs or documents exceeding 500,000 characters must manually trim or summarize the content before submission. The limit is enforced at the API layer only — the database `TEXT` type has no inherent limit. A clear error message must be returned indicating the limit.
+
+---
+
+### D-023 — Analysis title is required in persisted records; auto-generated if not provided
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** `change_analyses.title` is a NOT NULL column with no database default. If the caller does not supply a title in `POST /api/change-intelligence/analyses`, the application generates one before inserting: `"Change Analysis — [Month Day, Year H:MM AM/PM]"`. The timestamp is the server-side time at the moment of creation. `PATCH` cannot set title to null or empty string.
+
+**Rationale:** Requiring a non-null title simplifies the data model (no null-handling in display code) and gives every analysis a human-readable label without burdening the caller. Auto-generation is invisible to users who don't care about titles and useful to those who do.
+
+**Consequences:** The POST handler must generate a title before INSERT if the caller omits one. The schema has a NOT NULL constraint on title with no default, so any INSERT without a title fails at the database layer. A future improvement may derive a context-aware title from input content [FUTURE]; this is out of scope for M2. Resolves OQ-M2-01.
+
+---
+
+### D-024 — Analysis visibility is based on project access, not creator identity
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** `GET /api/change-intelligence/analyses` returns all analyses the authenticated user is authorized to view through project access. In M2, with no project-level access control in the existing application, this means all authenticated users can view all analyses. `created_by` is an optional convenience filter parameter, not an authorization boundary.
+
+**Rationale:** Creator-restricted visibility would prevent QA leads from reviewing team analyses and would not match the existing application's org-wide access model (OD-005). Project-based authorization is the correct long-term model and is naturally org-wide in M2 since project-level access control does not yet exist.
+
+**Consequences:** Any authenticated user can call `GET /analyses?created_by=<any-uuid>`. The UI may present "My analyses" and "All analyses" views as convenience filters using the same endpoint. If project-level access control is added in a future milestone, it gates which project-associated analyses a user sees. Resolves OQ-M2-02.
+
+---
+
+### D-025 — Offset pagination with 25 items per page and deterministic secondary sort
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** The list endpoint uses offset-based pagination. Default page size: 25. Maximum page size: 100. Default sort: `updated_at DESC, id DESC`. The secondary `id DESC` sort is required to ensure deterministic ordering when two analyses have the same `updated_at` timestamp. Cursor-based pagination is deferred to M12 [FUTURE].
+
+**Rationale:** Offset pagination is sufficient at pilot scale (expected hundreds of analyses, not millions). The secondary sort prevents non-deterministic page boundaries, which cause duplicate or missing items when a user pages through the list. 25 items matches the expected analysis density per sprint; 100 is a generous maximum for bulk export use cases.
+
+**Consequences:** Large analysis histories (thousands of records) will experience the O(offset) performance degradation inherent to offset pagination. This is acceptable for M2 pilot scale and is addressed in M12. Resolves OQ-M2-03.
+
+---
+
+### D-026 — At most one pr_diff input per analysis; replace-on-update behavior for drafts
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** Each analysis may have at most one input with `input_type = 'pr_diff'`. This is enforced at two layers: (1) a partial unique index in the database: `UNIQUE (analysis_id) WHERE input_type = 'pr_diff'`; (2) the service layer, which replaces an existing pr_diff on a draft analysis when `POST /inputs` is called with `input_type = 'pr_diff'`. Replacement is a DELETE + INSERT within a single transaction. No uniqueness constraint applies to any other input type.
+
+**Rationale:** A Change Intelligence analysis conceptually represents the review of one PR diff. Allowing multiple pr_diff inputs would create ambiguity about which diff was analyzed and complicate the AI prompt construction in M3. Replace-on-update (rather than reject-on-duplicate) makes the API ergonomic — the caller can freely correct the diff without first deleting the old one.
+
+**Consequences:** `POST /inputs` with `input_type = 'pr_diff'` returns 201 when creating the first pr_diff and 200 when replacing an existing one. If the partial unique index fires due to a concurrent race (two requests both attempted insert after checking for an existing row), the service layer must catch PostgreSQL error code `23505` on constraint `uq_change_analysis_inputs_pr_diff` and return 409 Conflict — not 500. The constraint name, SQL, and driver details must not appear in the error response. Any other database error continues to return 500. Resolves OQ-M2-04.
+
+---
+
+### D-027 — Content hash: SHA-256, lowercase hex, with CRLF normalization
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** The `content_hash` field stores the SHA-256 hash of input content, encoded as 64 lowercase hexadecimal characters, with no algorithm prefix. Canonicalization before hashing: (1) remove optional UTF-8 BOM (EF BB BF); (2) normalize CRLF (`\r\n`) to LF (`\n`); (3) preserve all other whitespace; (4) encode as UTF-8; (5) compute SHA-256; (6) store as 64 lowercase hex characters. The hash is computed server-side before INSERT. Callers must not supply `content_hash`; any caller-supplied value is ignored.
+
+**Rationale:** Lowercase hex is the most portable representation and matches common SHA-256 output from cryptographic libraries. CRLF normalization ensures the hash is stable across operating systems — a diff pasted from a Windows machine should hash identically to the same diff on Unix. No algorithm prefix is stored because SHA-256 is the only algorithm used in this system. The purpose is deterministic comparison and idempotency checking, not a cryptographic security guarantee.
+
+**Consequences:** The hash comparison is valid for idempotency checking only when both sides apply the same canonicalization pipeline. Any change in the canonicalization rules requires a rehash of all existing inputs — a breaking change requiring a data migration. Resolves OQ-M2-05.
+
+---
+
 ## Decision Template
 
 Use this template for new decisions:
