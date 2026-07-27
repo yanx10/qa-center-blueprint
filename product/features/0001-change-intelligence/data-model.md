@@ -6,7 +6,7 @@ Change Intelligence uses additive database migrations only. No existing table, c
 
 **Schema status:** [PROPOSAL] — All table definitions below are proposed. They must be reviewed by the implementing engineer before any migration is written. Confirmed patterns from Milestone 0 are marked as such.
 
-**Migration file:** `030_change_intelligence.sql` — introduced in Milestone 2. Not introduced in Milestone 1.
+**Migration file:** `031_change_intelligence.sql` — introduced in Milestone 2. Not introduced in Milestone 1.
 
 ---
 
@@ -47,7 +47,7 @@ Change Intelligence does not reference AI Studio tables (`prd_documents`, `ai_ge
 
 ## [PROPOSAL] New Tables
 
-All schemas below are proposals subject to implementation review. Names, columns, and types may be adjusted before migration is written. The migration file is `030_change_intelligence.sql`, introduced in Milestone 2.
+All schemas below are proposals subject to implementation review. Names, columns, and types may be adjusted before migration is written. The migration file is `031_change_intelligence.sql`, introduced in Milestone 2.
 
 ---
 

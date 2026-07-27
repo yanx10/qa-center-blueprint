@@ -530,6 +530,20 @@ Then the response contains at most 5 analyses
 And the pagination object shows page=2 and limit=5
 ```
 
+#### M2-AC-14a — GET /analyses rejects invalid page and limit values
+
+```
+Given an authenticated user with the feature enabled
+When GET /api/change-intelligence/analyses is called with any of the following:
+  page=0, page=-1, page=abc, page=1.5,
+  limit=0, limit=-1, limit=abc, limit=1.5, limit=101
+Then the response is 400
+And the body is { "success": false, "error": "<descriptive message>" }
+And absent parameters apply the default (page=1, limit=25) without error
+```
+
+Contract clarification: defaults apply only when the parameter is absent (not supplied). A supplied parameter must be a valid positive integer within its allowed range. The server must not silently normalize invalid supplied values.
+
 #### M2-AC-15 — GET /analyses returns an empty array when no analyses exist
 
 ```
@@ -710,7 +724,7 @@ And no record is deleted
 #### M2-AC-33 — Migration creates both tables with all specified columns
 
 ```
-Given 030_change_intelligence.sql has been applied
+Given 031_change_intelligence.sql has been applied
 When the database schema is inspected
 Then change_analyses exists with all 17 columns and check constraints on status and trigger_type
 And change_analysis_inputs exists with all 9 columns and check constraint on input_type
@@ -721,7 +735,7 @@ And no existing table has been modified
 #### M2-AC-34 — Migration is idempotent
 
 ```
-Given 030_change_intelligence.sql has already been applied
+Given 031_change_intelligence.sql has already been applied
 When the migration is applied a second time
 Then no error is raised
 And all tables, indexes, and constraints remain unchanged

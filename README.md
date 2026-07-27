@@ -237,7 +237,7 @@ Introduce the first Change Intelligence database tables and the API layer for ma
 
 | Item | Priority |
 |------|---------|
-| Database migration `030_change_intelligence.sql` (`change_analyses`, `change_analysis_inputs`) | M2 |
+| Database migration `031_change_intelligence.sql` (`change_analyses`, `change_analysis_inputs`) | M2 |
 | `GET /api/change-intelligence/analyses` — paginated list (no content) | M2 |
 | `POST /api/change-intelligence/analyses` — create draft record | M2 |
 | `GET /api/change-intelligence/analyses/:id` — retrieve with input metadata (no content) | M2 |
@@ -392,7 +392,7 @@ A milestone is not complete until every criterion below is satisfied.
 
 | Deliverable | Description |
 |-------------|-------------|
-| `030_change_intelligence.sql` | Additive migration introducing `change_analyses` (17 columns) and `change_analysis_inputs` (9 columns) with indexes and check constraints |
+| `031_change_intelligence.sql` | Additive migration introducing `change_analyses` (17 columns) and `change_analysis_inputs` (9 columns) with indexes and check constraints |
 | `GET /api/change-intelligence/analyses` | Paginated list — excludes input content |
 | `POST /api/change-intelligence/analyses` | Create draft analysis record |
 | `GET /api/change-intelligence/analyses/:id` | Retrieve analysis with input metadata — excludes content |

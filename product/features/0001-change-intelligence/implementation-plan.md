@@ -117,7 +117,7 @@ Run full regression smoke test of all existing workflows before merging. See reg
 
 ### Work items
 
-- [ ] Database migration `030_change_intelligence.sql` — introduces `change_analyses` and `change_analysis_inputs` tables
+- [ ] Database migration `031_change_intelligence.sql` — introduces `change_analyses` and `change_analysis_inputs` tables
 - [ ] `GET /api/change-intelligence/analyses` — paginated list endpoint (excludes content)
 - [ ] `POST /api/change-intelligence/analyses` — create draft analysis record
 - [ ] `GET /api/change-intelligence/analyses/:id` — retrieve analysis with input metadata (excludes content)
@@ -137,7 +137,7 @@ Run full regression smoke test of all existing workflows before merging. See reg
 
 | File | Change |
 |------|--------|
-| `030_change_intelligence.sql` | New migration — `change_analyses`, `change_analysis_inputs`, indexes |
+| `031_change_intelligence.sql` | New migration — `change_analyses`, `change_analysis_inputs`, indexes |
 | `app/api/change-intelligence/analyses/route.ts` | New file — GET list, POST create |
 | `app/api/change-intelligence/analyses/[id]/route.ts` | New file — GET detail, PATCH update |
 | `app/api/change-intelligence/analyses/[id]/inputs/route.ts` | New file — POST add input |
@@ -157,7 +157,7 @@ Run full regression smoke test of all existing workflows before merging. See reg
 
 ### Database changes
 
-New tables via `030_change_intelligence.sql`:
+New tables via `031_change_intelligence.sql`:
 - `change_analyses` (17 columns including nullable M3 result columns)
 - `change_analysis_inputs` (9 columns)
 

@@ -10,7 +10,7 @@
 | **Depends on** | M1 — Isolated Feature Shell (complete) |
 | **Unlocks** | M3 — Manual Input Analysis |
 | **Status** | Specification Complete — Ready for Implementation |
-| **Migration file** | `030_change_intelligence.sql` |
+| **Migration file** | `031_change_intelligence.sql` |
 | **New tables** | `change_analyses`, `change_analysis_inputs` |
 | **New API routes** | 6 endpoints under `/api/change-intelligence/analyses` |
 
@@ -160,19 +160,23 @@ The actual form components and result views are M3 scope. M2 provides the API co
 
 ## Feature Management
 
-All M2 API routes enforce the feature gate using the same pattern established in M1:
+All M2 API routes enforce the feature gate through the shared `requireChangeIntelligence()` guard defined in `lib/change-intelligence/guard.ts`. The guard supersedes the env-var approach described for M1: feature state is controlled via the `feature_flags` database table (introduced by the feature-management-polish pass that shipped before M2).
+
+The guard executes the following sequence on every request:
 
 ```
-POST /api/change-intelligence/analyses
+POST /api/change-intelligence/analyses (representative — same sequence for all six M2 handlers and the status route)
 
-1. if (!isChangeIntelligenceEnabled()) return { success: false, error: "Change Intelligence is not enabled." } (403)
-2. const { ctx, errorResponse } = await requireAuth(); if (errorResponse) return errorResponse;
-3. business logic
+1. Fetch the Change Intelligence feature record from feature_flags (one DB query).
+2. If the record is missing or feature.enabled = false → return 403 (before auth,
+   to avoid leaking route existence when the feature is disabled).
+3. requireAuth() — if no valid session → return 401.
+4. Evaluate admin_only and role eligibility using the already-fetched feature record.
+5. If the authenticated user's role does not satisfy eligibility → return 403.
+6. Return { feature, ctx } to the route handler for business logic.
 ```
 
-The feature gate check is always first, before auth, to avoid leaking the existence of routes when the feature is disabled.
-
-The feature gate uses the server-side `CHANGE_INTELLIGENCE_ENABLED` environment variable confirmed in M1 (D-012). No new flag mechanism is introduced.
+The feature gate check is always first, before auth, to avoid leaking the existence of routes when the feature is disabled. This is the "Option-A gate+auth" pattern: one DB query per request, fail-closed on any DB error. The existing status route was also refactored to use `requireChangeIntelligence()` for consistency with all six M2 handlers.
 
 ---
 
@@ -429,8 +433,8 @@ Returns a paginated list of analyses. Input content is excluded.
 | `release_id` | uuid | No | — | Filter by release |
 | `status` | text | No | — | Filter by status |
 | `created_by` | uuid | No | — | Filter by creator; not an authorization boundary — any authenticated user may filter by any creator UUID |
-| `page` | integer | No | 1 | 1-indexed |
-| `limit` | integer | No | 25 | Max 100 |
+| `page` | integer | No | 1 | 1-indexed. Default applies only when absent. Supplied value must be a positive integer (≥ 1); invalid values return 400. |
+| `limit` | integer | No | 25 | Default applies only when absent. Supplied value must be an integer from 1 through 100 inclusive; invalid values return 400. |
 
 **Default sort:** `updated_at DESC, id DESC`. The secondary `id DESC` is required for deterministic ordering — without it, two analyses with identical `updated_at` timestamps can appear in different positions across paginated requests.
 
@@ -904,7 +908,7 @@ The following metrics are identified now for M12 instrumentation:
 
 ### File
 
-`030_change_intelligence.sql` (D-010)
+`031_change_intelligence.sql` (D-010)
 
 ### Safety requirements
 
@@ -916,7 +920,7 @@ The following metrics are identified now for M12 instrumentation:
 ### Migration content (specification-level — implementation subject to verification)
 
 ```sql
--- Migration 030: Change Intelligence — Analysis Persistence Foundation
+-- Migration 031: Change Intelligence — Analysis Persistence Foundation
 -- Milestone: M2
 
 CREATE TABLE IF NOT EXISTS change_analyses (
@@ -983,10 +987,10 @@ This is a specification-level schema. The implementation team must verify the ex
 ## Rollout Plan
 
 1. Merge the M2 implementation PR with the feature flag disabled.
-2. Run `030_change_intelligence.sql` on the staging database and verify all new tables and indexes are created correctly.
+2. Run `031_change_intelligence.sql` on the staging database and verify all new tables and indexes are created correctly.
 3. Run the backward compatibility regression checklist (BC-01 through BC-15) in staging.
 4. Run all M2 acceptance criteria in staging.
-5. Enable the feature flag (`CHANGE_INTELLIGENCE_ENABLED=true`) in staging.
+5. Enable the Change Intelligence feature flag in the `feature_flags` table in staging.
 6. Verify that the `/change-intelligence` page shows the updated state.
 7. Disable the feature flag before releasing to production.
 8. Apply the migration to production.
@@ -997,13 +1001,13 @@ This is a specification-level schema. The implementation team must verify the ex
 
 ## Acceptance Criteria
 
-Full acceptance criteria are in `acceptance-criteria.md` as M2-AC-01 through M2-AC-46. Summarized by group:
+Full acceptance criteria are in `acceptance-criteria.md` as M2-AC-01 through M2-AC-46, with M2-AC-14a as an additional criterion inserted within the list group. Summarized by group:
 
 | Group | Criteria | Count |
 |-------|---------|-------|
 | Feature gate and authentication | M2-AC-01 to M2-AC-03 | 3 |
 | POST /analyses (create) | M2-AC-04 to M2-AC-11 | 8 |
-| GET /analyses (list) | M2-AC-12 to M2-AC-15 | 4 |
+| GET /analyses (list) | M2-AC-12 to M2-AC-15 (incl. M2-AC-14a) | 5 |
 | GET /analyses/:id (detail) | M2-AC-16 to M2-AC-19 | 4 |
 | PATCH /analyses/:id (update) | M2-AC-20 to M2-AC-24 | 5 |
 | POST /analyses/:id/inputs (add input) | M2-AC-25 to M2-AC-29 | 5 |
@@ -1014,7 +1018,7 @@ Full acceptance criteria are in `acceptance-criteria.md` as M2-AC-01 through M2-
 | Visibility, sort, and pagination | M2-AC-39 to M2-AC-41 | 3 |
 | PR diff uniqueness and replace behavior | M2-AC-42 to M2-AC-43 | 2 |
 | Content hash canonicalization | M2-AC-44 to M2-AC-46 | 3 |
-| **Total** | | **46** |
+| **Total** | | **47** |
 
 ---
 
@@ -1061,11 +1065,11 @@ Run the full regression smoke test checklist from `implementation-plan.md` befor
 
 In addition to the standard Definition of Done in `acceptance-criteria.md`:
 
-- [ ] All 46 M2 acceptance criteria pass (M2-AC-01 through M2-AC-46)
+- [ ] All 47 M2 acceptance criteria pass (M2-AC-01 through M2-AC-46, plus M2-AC-14a)
 - [ ] All 15 backward compatibility criteria (BC-01 through BC-15) pass
 - [ ] Unit tests exist for status machine, enum validation, content size, and content_hash
 - [ ] API tests cover all 6 endpoints × happy path and all error cases listed above
-- [ ] Migration `030_change_intelligence.sql` tested against production schema copy
+- [ ] Migration `031_change_intelligence.sql` tested against production schema copy
 - [ ] Migration verified idempotent
 - [ ] All existing QA Center routes verified unaffected (regression checklist)
 - [ ] Feature flag disabled state: all existing workflows pass
@@ -1084,9 +1088,9 @@ In addition to the standard Definition of Done in `acceptance-criteria.md`:
 | M0 — Existing System Discovery | COMPLETE | Migration number, FK conventions, auth patterns all confirmed |
 | M1 — Isolated Feature Shell | COMPLETE | Feature gate, navigation item, and route structure in place |
 | `requireAuth()` pattern | Confirmed (M0) | Used by all M2 routes |
-| `isChangeIntelligenceEnabled()` helper | Implemented (M1) | Used by all M2 routes |
+| `requireChangeIntelligence()` guard | Implemented (M2) | DB-backed gate+auth guard for all M2 routes; supersedes M1 env-var approach |
 | Response envelope `{ success, data/error }` | Confirmed (D-015) | Used by all M2 routes |
-| `030_change_intelligence.sql` migration file | New (M2) | Must not conflict with migrations 010–029 |
+| `031_change_intelligence.sql` migration file | New (M2) | 030 was taken by feature_flags; 031 used instead |
 
 ---
 

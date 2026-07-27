@@ -111,7 +111,7 @@ No new infrastructure is introduced in Phase 1.
 |------|-----------|--------|------------|
 | PR diffs exceed Claude context window | Confirmed risk | Medium | Define `MAX_DIFF_TOKENS` and truncation behavior before M2. Test with large diffs in early M2 work. |
 | AI analysis quality is insufficient to generate trust in pilot | Medium | High | Explicit evidence and confidence display on every output; `unable_to_verify` fallback; collect pilot feedback for M10 |
-| Regression in existing features introduced by Milestone 2+ migration | Low | High | Migration (`030_change_intelligence.sql`) tested against production schema copy before merge. New tables only — no ALTER TABLE. |
+| Regression in existing features introduced by Milestone 2+ migration | Low | High | Migration (`031_change_intelligence.sql`) tested against production schema copy before merge. New tables only — no ALTER TABLE. |
 | Auth error in a Change Intelligence API route | Low | Low | All routes call `requireAuth()` explicitly; confirmed pattern from M0 (D-014) |
 | AI Studio component was not reusable, requiring parallel implementation | Confirmed — resolved | Low | Parallel Change Intelligence review UI confirmed as the correct approach (D-009). No blocker. |
 | Feature flag approach doesn't support per-user pilot | Low | Low | M9 pilot will extend the flag with a `change_intelligence_pilot_users` table or equivalent (OD-012). Decision deferred to M9 design. |
