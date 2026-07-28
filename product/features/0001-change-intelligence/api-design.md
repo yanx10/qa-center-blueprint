@@ -124,9 +124,25 @@ const rows = await sql`SELECT * FROM change_analyses WHERE id = ${id}`;
 
 ---
 
-### Milestone 2 — Manual Input Analysis
+### Milestone 2 — Analysis Persistence Foundation
 
-#### `POST /api/change-intelligence/analyses`
+> **Note:** The section below reflects the original API design draft, which pre-dates the M2 milestone restructuring. The M2 milestone was redesigned in the current blueprint — see [milestones/m2-analysis-persistence-foundation.md](milestones/m2-analysis-persistence-foundation.md) for the authoritative M2 API contracts. M3 AI processing endpoints are documented in the Milestone 3 section below.
+
+**Authoritative M2 endpoints** (full contracts in [milestones/m2-analysis-persistence-foundation.md](milestones/m2-analysis-persistence-foundation.md)):
+
+- `GET /api/change-intelligence/analyses` — List analyses with offset pagination (page/limit, sort: updated_at DESC + id DESC)
+- `POST /api/change-intelligence/analyses` — Create a new analysis in draft status
+- `GET /api/change-intelligence/analyses/:id` — Get analysis detail with input metadata (enhanced in M3 to return `analysis_json`)
+- `PATCH /api/change-intelligence/analyses/:id` — Update title or transition status (draft → ready, draft/ready → cancelled)
+- `POST /api/change-intelligence/analyses/:id/inputs` — Add or replace an input on a draft analysis
+- `DELETE /api/change-intelligence/analyses/:id/inputs/:inputId` — Remove an input from a draft analysis
+- `DELETE /api/change-intelligence/analyses/:id` — Delete a draft or cancelled analysis
+
+---
+
+#### [LEGACY DRAFT] `POST /api/change-intelligence/analyses`
+
+> The endpoint below documents the original design intent before M2 was restructured. It is superseded by the M2 milestone specification linked above.
 
 **Purpose:** Create a new analysis record and trigger AI processing.
 **Auth:** `requireAuth()`
@@ -151,7 +167,7 @@ const rows = await sql`SELECT * FROM change_analyses WHERE id = ${id}`;
 }
 ```
 
-Valid `type` values: `pr_diff`, `requirement_text`, `jira_story`, `acceptance_criteria`, `prd_document`, `markdown_spec`
+Valid `type` values: `pr_diff`, `pr_description`, `requirement_text`, `jira_story`, `acceptance_criteria`, `prd_text`, `markdown_spec`, `supplemental_context`
 
 **Response — 201**
 ```json
@@ -222,6 +238,8 @@ Valid `type` values: `pr_diff`, `requirement_text`, `jira_story`, `acceptance_cr
 **Feature flag:** 403 if disabled
 **Milestone:** 2
 
+**M3 enhancement:** When `status = 'completed'`, the response includes `analysis_json` containing the full QA Intelligence Report. When status is any other value, `analysis_json` is null. The field is never returned in the list endpoint (D-009).
+
 **Response — 200**
 ```json
 {
@@ -289,14 +307,199 @@ Valid `type` values: `pr_diff`, `requirement_text`, `jira_story`, `acceptance_cr
 
 ---
 
-### Milestone 3 — Requirement Comparison
+### Milestone 3 — AI Change Analysis
+
+---
+
+#### `POST /api/change-intelligence/analyses/:id/generate`
+
+**Purpose:** Trigger AI analysis on a ready analysis and return the completed result.
+**Auth:** `requireAuth()`
+**Feature flag:** 403 if disabled
+**Milestone:** 3
+**Execution:** Synchronous — the endpoint waits for AI completion. Typical duration: 15–60 seconds. Configured server timeout: 120 seconds.
+
+**Preconditions:**
+- Analysis must be in `ready` status. Returns 409 for any other status.
+
+**Status transitions:**
+```
+ready → processing → completed   (AI succeeded)
+ready → processing → failed      (AI failed — timeout, parse error, validation failure)
+```
+
+**Response contract:**
+- Returns HTTP 200 for both `completed` and `failed` outcomes (D-030).
+- Returns HTTP 409 if the analysis is not in `ready` status.
+- Returns HTTP 500 only for unexpected server failures (e.g., DB write failure).
+- The client must read `data.status` to determine the outcome.
+
+**Request:** No body required.
+
+**Success response (200) — AI completed:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "7f3c…",
+    "status": "completed",
+    "provider": "anthropic",
+    "ai_model": "claude-sonnet-4-6",
+    "analysis_version": "m3-v1",
+    "temperature": 0.2,
+    "input_tokens": 12450,
+    "output_tokens": 3280,
+    "processing_ms": 34200,
+    "change_summary": "Adds optional email notification preference to user settings",
+    "requirement_summary": "User notification preferences not fully addressed in implementation",
+    "analysis_json": { "schema_version": "1.0.0", "executive_summary": { "..." : "..." }, "...": "..." },
+    "started_at": "2026-07-27T14:00:00Z",
+    "completed_at": "2026-07-27T14:00:34Z",
+    "updated_at": "2026-07-27T14:00:34Z"
+  }
+}
+```
+
+**Response (200) — AI failed:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "7f3c…",
+    "status": "failed",
+    "error_code": "PROVIDER_TIMEOUT",
+    "error_message": "The AI provider did not respond within the configured timeout.",
+    "analysis_json": null,
+    "retry_count": 0,
+    "started_at": "2026-07-27T14:00:00Z",
+    "completed_at": "2026-07-27T14:02:01Z",
+    "updated_at": "2026-07-27T14:02:01Z"
+  }
+}
+```
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 409 | Analysis is not in `ready` status |
+| 403 | Feature disabled |
+| 401 | Not authenticated |
+| 500 | Unexpected server error (e.g., DB write failure — analysis may be left in `processing` state) |
+
+**Error codes stored in `error_code` on failure:**
+
+| error_code | Condition |
+|-----------|-----------|
+| `PROVIDER_TIMEOUT` | Anthropic API call timed out |
+| `PROVIDER_ERROR` | Anthropic returned an error HTTP response |
+| `INVALID_OUTPUT` | AI response could not be parsed as JSON |
+| `SCHEMA_VALIDATION_FAILED` | JSON parsed but failed schema validation against `analysis-schema.md` |
+| `INPUT_TOO_LARGE` | Combined inputs exceed the character limit (enforced before AI call) |
+| `DB_WRITE_FAILED` | Database write failed after successful AI call — results cannot be saved |
+| `UNKNOWN_ERROR` | Any other unexpected error |
+
+---
+
+#### `POST /api/change-intelligence/analyses/:id/retry`
+
+**Purpose:** Retry a failed analysis using the same persisted inputs.
+**Auth:** `requireAuth()`
+**Feature flag:** 403 if disabled
+**Milestone:** 3
+**Execution:** Synchronous — same as /generate.
+
+**Preconditions:**
+- Analysis must be in `failed` status. Returns 409 for any other status.
+- `retry_count` must be less than 3. Returns 422 if `retry_count >= 3`.
+
+**Behavior:**
+1. Validate preconditions.
+2. Increment `retry_count` atomically (conditional `UPDATE WHERE status = 'failed' AND retry_count < 3`).
+3. Clear `error_code` and `error_message`.
+4. Set status to `processing`, set `started_at`.
+5. Execute AI analysis (same as /generate).
+6. Persist result (same as /generate).
+7. Return 200 with the full analysis object.
+
+**Request:** No body required.
+
+**Response (200):** Same shape as /generate response.
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 409 | Analysis is not in `failed` status |
+| 422 | `retry_count` has reached the maximum of 3 — no further retries permitted |
+| 403 | Feature disabled |
+| 401 | Not authenticated |
+| 500 | Unexpected server error |
+
+---
+
+#### `POST /api/change-intelligence/analyses/:id/cancel`
+
+**Purpose:** Cancel a ready analysis before AI processing begins.
+**Auth:** `requireAuth()`
+**Feature flag:** 403 if disabled
+**Milestone:** 3
+
+**Preconditions:**
+- Analysis must be in `ready` status. Returns 409 for any other status.
+- **M3 limitation:** Cancellation of an in-progress (`processing`) analysis is not supported. Synchronous execution cannot be interrupted. (D-033)
+
+**Status transition:** `ready` → `cancelled`
+
+**Request:** No body required.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "7f3c…",
+    "status": "cancelled",
+    "updated_at": "2026-07-27T14:00:00Z"
+  }
+}
+```
+
+**Error responses:**
+
+| Status | Code | Message |
+|--------|------|---------|
+| 404 | `NOT_FOUND` | `"Analysis not found."` |
+| 409 | `INVALID_STATUS` | `"Processing analyses cannot be cancelled. The analysis is running synchronously and cannot be interrupted."` (when `processing`) |
+| 409 | `INVALID_STATUS` | `"Completed analyses cannot be cancelled."` (when `completed`) |
+| 409 | `INVALID_STATUS` | `"Failed analyses cannot be cancelled. Use retry instead."` (when `failed`) |
+| 409 | `INVALID_STATUS` | `"This analysis is already cancelled."` (when `cancelled`) |
+| 409 | `INVALID_STATUS` | `"Draft analyses cannot be cancelled. Mark the analysis as ready first, or delete it."` (when `draft`) |
+| 403 | — | Feature disabled |
+| 401 | — | Not authenticated |
+
+---
+
+#### `GET /api/change-intelligence/analyses/:id` (M3 Enhancement)
+
+The M2 detail endpoint is enhanced in M3 to return `analysis_json` when `status = completed` and to include all new M3 fields.
+
+**New fields added in M3:** `provider`, `temperature`, `analysis_json` (when completed), `input_tokens`, `output_tokens`, `processing_ms`, `retry_count`, `error_code`, `error_message`, `started_at`, `completed_at`.
+
+**`analysis_json` rules:**
+- Returned only when `status = 'completed'`; `null` for all other statuses
+- Never returned by the list endpoint (`GET /analyses`)
+
+---
+
+### Milestone 4 — Requirement Comparison
 
 #### `PATCH /api/change-intelligence/analyses/:id/requirements/:requirementId`
 
 **Purpose:** Record a human reviewer's override on a requirement's coverage status.
 **Auth:** `requireAuth()`
 **Feature flag:** 403 if disabled
-**Milestone:** 3
+**Milestone:** 4
 
 **Request**
 ```json

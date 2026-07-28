@@ -860,38 +860,981 @@ And the constraint name, SQL, driver details, or stack trace do not appear in th
 And the analysis has exactly one pr_diff input after both requests complete
 ```
 
+#### M2-UX-01 — pr_description is a valid input type
+
+```
+Given a draft analysis
+When a user submits an input with input_type 'pr_description'
+Then the input is accepted with HTTP 200
+And the input appears in GET /analyses/:id with input_type 'pr_description'
+And the input_type check constraint in the database permits the value
+```
+
+#### M2-UX-02 — Input type dropdown shows friendly labels
+
+```
+Given a user is on the analysis detail page for a draft analysis
+When the "Add Input" form is visible
+Then the input type dropdown shows "PR Diff", "PR Description", "Requirement Text",
+  "Acceptance Criteria", "PRD Text", "Jira Story", and "Markdown Spec"
+And the dropdown does not show raw internal type names (e.g. 'pr_diff', 'pr_description')
+```
+
+#### M2-UX-03 — Input cards display friendly labels
+
+```
+Given an analysis has inputs of various types
+When the user views the analysis detail page
+Then each input card shows the friendly label for its type (e.g. "PR Diff", not "pr_diff")
+And the card shows the source_label prominently when present
+And the card shows a truncated content_hash (first 8 characters) as secondary metadata
+And the card shows the created_at timestamp
+And no raw input content is displayed on the card
+```
+
+#### M2-UX-04 — Readiness panel shows present types and PR diff status
+
+```
+Given a user is viewing a draft analysis
+Then a readiness panel is visible below the header
+And the panel lists the input types present (using friendly labels)
+When no PR diff is present
+Then the panel shows a note: "A PR diff is required to mark this analysis ready."
+When a PR diff is present
+Then the panel shows: "PR diff present — ready to submit."
+```
+
+#### M2-UX-05 — Mark Ready button is in the readiness panel
+
+```
+Given a user is viewing a draft analysis
+Then the "Mark Ready" button is located inside the readiness panel
+And the button is disabled when no PR diff input is present
+And the button is enabled when at least one PR diff input is present
+When clicked and a PR diff is present
+Then the analysis transitions to 'ready' status
+And the readiness panel is no longer visible (status is no longer draft)
+```
+
+#### M2.1-AC-01 — Only draft and cancelled analyses can be deleted
+
+```
+Given an analysis with status 'ready', 'processing', 'completed', or 'failed'
+When DELETE /api/change-intelligence/analyses/:id is called
+Then the response is HTTP 409
+And the body is { "success": false, "error": "Cannot delete an analysis with status '<status>'. Only draft and cancelled analyses can be deleted." }
+And the analysis record is unchanged
+```
+
+#### M2.1-AC-02 — Draft analysis can be deleted
+
+```
+Given an analysis with status 'draft'
+When DELETE /api/change-intelligence/analyses/:id is called
+Then the response is HTTP 200
+And the body is { "success": true, "data": { "deleted": true, "id": "<id>" } }
+And the analysis record no longer exists in the database
+And all inputs associated with that analysis are also deleted (cascade)
+```
+
+#### M2.1-AC-03 — Cancelled analysis can be deleted
+
+```
+Given an analysis with status 'cancelled'
+When DELETE /api/change-intelligence/analyses/:id is called
+Then the response is HTTP 200
+And the body is { "success": true, "data": { "deleted": true, "id": "<id>" } }
+And the analysis record no longer exists in the database
+```
+
+#### M2.1-AC-04 — Deleting a nonexistent analysis returns 404
+
+```
+Given an ID that does not exist in change_analyses
+When DELETE /api/change-intelligence/analyses/:id is called
+Then the response is HTTP 404
+And the body is { "success": false, "error": "Analysis not found." }
+```
+
+#### M2.1-AC-05 — Delete button appears in the list for draft and cancelled only
+
+```
+Given the analyses list contains analyses in various statuses
+Then a Delete action is visible for each draft and cancelled row
+And no Delete action is visible for ready, processing, completed, or failed rows
+```
+
+#### M2.1-AC-06 — Delete confirmation dialog includes title and irreversibility warning
+
+```
+Given the user clicks Delete on a list row
+Then a dialog appears with title "Delete analysis?"
+And the dialog body includes the analysis title
+And the dialog body states the action cannot be undone
+And the dialog has Cancel and "Delete Analysis" actions
+```
+
+#### M2.1-AC-07 — Confirmed list deletion removes the row without a full-page reload
+
+```
+Given the user confirms deletion from the list view
+When the API returns success
+Then the deleted row is removed from the table immediately
+And the total count is updated
+And no full-page reload occurs
+```
+
+#### M2.1-AC-08 — Delete button appears on the detail page for draft and cancelled only
+
+```
+Given a user is viewing the detail page for a draft or cancelled analysis
+Then a Delete button is visible in the header action area
+Given a user is viewing the detail page for a ready, processing, completed, or failed analysis
+Then no Delete button is visible
+```
+
+#### M2.1-AC-09 — Confirmed detail deletion navigates back to the list
+
+```
+Given the user confirms deletion from the detail page
+When the API returns success
+Then the user is navigated to /change-intelligence/analyses
+```
+
 ---
 
-### Milestone 3 — Manual Input Analysis
+### Milestone 3 — AI Change Analysis
 
-#### M3-AC-01 — Analysis submits and produces output
+#### Feature Gate and Authentication
 
-```
-Given a ready analysis with at least one pr_diff and one requirement input
-When the user triggers the analysis
-Then a change summary is displayed
-And a list of extracted requirements is displayed
-And each requirement shows evidence and confidence
-And the analysis status transitions to completed
-```
-
-#### M3-AC-02 — Missing required inputs are rejected
+##### M3-AC-01 — All M3 endpoints return 403 when feature is disabled
 
 ```
-Given an analysis with no pr_diff input
-When the user attempts to trigger analysis
-Then an error is shown
-And the analysis is not processed
+Given CHANGE_INTELLIGENCE_ENABLED is unset
+When POST /generate, POST /retry, or POST /cancel is called
+Then the response is 403
+And the error is "Change Intelligence is not enabled."
 ```
 
-#### M3-AC-03 — AI failure is isolated
+##### M3-AC-02 — All M3 endpoints return 401 when not authenticated
 
 ```
-Given the Anthropic API returns an error during analysis
-When the user is on the analysis page
-Then an error message is shown on the Change Intelligence page
-And the analysis status transitions to failed
-And all other QA Center pages are unaffected
+Given the feature is enabled
+And the request has no valid session
+When any M3 endpoint is called
+Then the response is 401
+```
+
+##### M3-AC-03 — Feature gate is checked before auth on all M3 endpoints
+
+```
+Given the feature is disabled
+And the request has no valid session
+When any M3 endpoint is called
+Then the response is 403 (not 401)
+```
+
+---
+
+#### Preconditions and State Validation
+
+##### M3-AC-04 — Generate returns 409 when analysis is in draft status
+
+```
+Given an analysis in draft status
+When POST /analyses/:id/generate is called
+Then the response is 409
+And the error message names the invalid status
+And the analysis status is unchanged
+```
+
+##### M3-AC-05 — Generate returns 409 when analysis is in processing status
+
+```
+Given an analysis in processing status
+When POST /analyses/:id/generate is called
+Then the response is 409
+```
+
+##### M3-AC-06 — Generate returns 409 when analysis is in completed status
+
+```
+Given an analysis in completed status
+When POST /analyses/:id/generate is called
+Then the response is 409
+```
+
+##### M3-AC-07 — Generate returns 409 when analysis is in cancelled status
+
+```
+Given an analysis in cancelled status
+When POST /analyses/:id/generate is called
+Then the response is 409
+```
+
+##### M3-AC-08 — Generate returns 409 when analysis is in failed status
+
+```
+Given an analysis in failed status
+When POST /analyses/:id/generate is called
+Then the response is 409 (use POST /retry for failed analyses)
+```
+
+##### M3-AC-09 — Retry returns 409 when analysis is not in failed status
+
+```
+Given an analysis in any status other than failed (draft, ready, processing, completed, cancelled)
+When POST /analyses/:id/retry is called
+Then the response is 409
+```
+
+##### M3-AC-10 — Retry returns 422 when retry_count has reached 3
+
+```
+Given an analysis in failed status with retry_count = 3
+When POST /analyses/:id/retry is called
+Then the response is 422
+And the error message indicates the maximum retry count has been reached
+And no AI call is made
+```
+
+##### M3-AC-11 — Cancel returns 409 when analysis is in processing status
+
+```
+Given an analysis in processing status
+When POST /analyses/:id/cancel is called
+Then the response is 409
+And the error message explains that in-progress analysis cannot be cancelled in M3
+```
+
+##### M3-AC-12 — Cancel returns 409 when analysis is not in ready status
+
+```
+Given an analysis in any status other than ready
+When POST /analyses/:id/cancel is called
+Then the response is 409
+```
+
+---
+
+#### Execution and AI Processing
+
+##### M3-AC-13 — Successful generate transitions status to completed
+
+```
+Given an analysis in ready status with valid inputs
+When POST /analyses/:id/generate completes successfully
+Then analysis.status is "completed"
+And analysis_json is non-null
+And started_at is non-null
+And completed_at is non-null
+```
+
+##### M3-AC-14 — Generate sets started_at before calling the AI
+
+```
+Given an analysis in ready status
+When POST /analyses/:id/generate is called
+Then started_at is set before the AI call begins
+And started_at reflects the server time at the moment of processing start
+```
+
+##### M3-AC-15 — Generate sets completed_at after the AI call resolves
+
+```
+Given a completed or failed analysis
+Then completed_at is non-null
+And completed_at > started_at
+```
+
+##### M3-AC-16 — Generate records the AI model used
+
+```
+Given a completed analysis
+Then ai_model is a non-null string
+And ai_model matches the model resolved by the application's model chain
+```
+
+##### M3-AC-17 — Generate records the prompt version
+
+```
+Given a completed or failed analysis
+Then analysis_version is "m3-v1" (or the current prompt version constant)
+```
+
+##### M3-AC-18 — Generate records the provider
+
+```
+Given a completed analysis
+Then provider is "anthropic"
+```
+
+##### M3-AC-19 — Generate records temperature
+
+```
+Given a completed analysis
+Then temperature is 0.2
+```
+
+##### M3-AC-20 — Generate records input and output token counts
+
+```
+Given a completed analysis
+Then input_tokens is a positive integer
+And output_tokens is a positive integer
+And both values match the usage from the Anthropic API response
+```
+
+##### M3-AC-21 — Generate records processing_ms
+
+```
+Given a completed or failed analysis
+Then processing_ms is a positive integer
+And reflects the actual elapsed time of the AI call in milliseconds
+```
+
+##### M3-AC-22 — Generate returns HTTP 200 for both completed and failed outcomes
+
+```
+Given POST /analyses/:id/generate results in either completed or failed status
+Then the HTTP response code is 200
+And the response body contains the full analysis object
+And data.status indicates the outcome
+```
+
+---
+
+#### Prompt Building
+
+##### M3-AC-23 — All pr_diff inputs are included in the AI prompt
+
+```
+Given an analysis with one or more pr_diff inputs
+When the prompt is constructed
+Then all pr_diff content appears in the prompt
+And each input is labeled by type
+```
+
+##### M3-AC-24 — All requirement-type inputs are included in the AI prompt
+
+```
+Given an analysis with requirement_text, jira_story, acceptance_criteria, prd_text, or markdown_spec inputs
+When the prompt is constructed
+Then all requirement content appears in the prompt
+```
+
+##### M3-AC-25 — Supplemental context inputs are included in the AI prompt
+
+```
+Given an analysis with supplemental_context inputs
+When the prompt is constructed
+Then supplemental context appears after requirement inputs
+```
+
+##### M3-AC-26 — PR diff appears before requirement inputs in the prompt
+
+```
+Given an analysis with both pr_diff and requirement inputs
+When the prompt is constructed
+Then all pr_diff content precedes all requirement content
+```
+
+##### M3-AC-27 — System prompt matches the m3-v1 version
+
+```
+Given a generate request
+When the AI call is made
+Then the system prompt matches the m3-v1 system prompt constant from lib/ai/prompts/change-intelligence.ts
+```
+
+##### M3-AC-28 — Inputs exceeding the character limit return INPUT_TOO_LARGE before any AI call
+
+```
+Given an analysis whose combined input character count exceeds MAX_TOTAL_INPUT_CHARACTERS
+When POST /analyses/:id/generate is called
+Then no AI call is made
+And the analysis transitions to failed with error_code "INPUT_TOO_LARGE"
+And the response is HTTP 200 with status "failed"
+```
+
+---
+
+#### AI Output and Schema Validation
+
+##### M3-AC-29 — Output JSON conforms to analysis-schema.md version 1.0.0
+
+```
+Given a completed analysis
+Then analysis_json.schema_version is "1.0.0"
+And all required top-level fields are present
+And all enum values are from the allowed sets
+```
+
+##### M3-AC-30 — Output includes a non-null executive_summary with required fields
+
+```
+Given a completed analysis
+Then analysis_json.executive_summary.headline is a non-empty string
+And analysis_json.executive_summary.risk_level is one of: low, medium, high, critical
+And analysis_json.executive_summary.primary_concern is a non-empty string
+And analysis_json.executive_summary.recommended_action is a non-empty string
+```
+
+##### M3-AC-31 — Output includes a non-null change_summary with required fields
+
+```
+Given a completed analysis
+Then analysis_json.change_summary.description is a non-empty string
+And analysis_json.change_summary.change_type is a non-empty array
+And analysis_json.change_summary.scope is one of: isolated, moderate, broad, cross-cutting
+And analysis_json.change_summary.key_areas_modified is an array (may be empty)
+```
+
+##### M3-AC-32 — Output risk_level is a valid enum value
+
+```
+Given a completed analysis
+Then analysis_json.risk_assessment.overall_level is one of: low, medium, high, critical
+And analysis_json.executive_summary.risk_level is one of: low, medium, high, critical
+```
+
+##### M3-AC-33 — Output confidence fields are valid enum values
+
+```
+Given a completed analysis
+Then analysis_json.confidence.overall is one of: low, medium, high
+And analysis_json.confidence.diff_completeness is one of: low, medium, high
+And analysis_json.confidence.requirement_completeness is one of: low, medium, high
+And analysis_json.confidence.context_sufficiency is one of: low, medium, high
+```
+
+##### M3-AC-34 — Malformed AI response (unparseable JSON) transitions to failed
+
+```
+Given the AI returns a response that cannot be parsed as JSON
+When the output processing step runs
+Then the analysis transitions to failed with error_code "INVALID_OUTPUT"
+And analysis_json remains null
+```
+
+##### M3-AC-35 — Schema validation failure transitions to failed
+
+```
+Given the AI returns valid JSON that fails schema validation (missing required fields, invalid enum values)
+When the validation step runs
+Then the analysis transitions to failed with error_code "SCHEMA_VALIDATION_FAILED"
+And analysis_json remains null
+```
+
+##### M3-AC-36 — Partial output is not stored on schema validation failure
+
+```
+Given the AI returns JSON that is partially valid (some fields correct, some invalid)
+When schema validation fails
+Then analysis_json is null (not partially populated)
+And the analysis is in failed status
+```
+
+---
+
+#### Persistence
+
+##### M3-AC-37 — analysis_json is persisted atomically with status transition to completed
+
+```
+Given a successful AI response
+When the result is persisted
+Then the UPDATE to change_analyses sets status, analysis_json, ai_model, analysis_version,
+  provider, temperature, input_tokens, output_tokens, processing_ms, change_summary,
+  requirement_summary, risk_level, analysis_schema_version, change_type_summary, started_at, completed_at in a single transaction
+And if the transaction fails, the analysis remains in its previous state (not partially updated)
+```
+
+##### M3-AC-38 — change_summary is populated from analysis_json on completion
+
+```
+Given a completed analysis
+Then change_analyses.change_summary equals analysis_json.executive_summary.headline
+```
+
+##### M3-AC-39 — requirement_summary is populated from analysis_json on completion
+
+```
+Given a completed analysis
+Then change_analyses.requirement_summary equals analysis_json.executive_summary.primary_concern
+```
+
+##### M3-AC-40 — Failed analysis has error_code and error_message set
+
+```
+Given an analysis that failed
+Then error_code is a non-null string matching one of the defined error code constants
+And error_message is a non-null, sanitized string
+And error_message does not contain stack traces, SQL, or driver details
+```
+
+##### M3-AC-41 — Failed analysis has started_at set
+
+```
+Given an analysis that failed after the AI call was attempted
+Then started_at is non-null
+And completed_at is non-null
+```
+
+##### M3-AC-42 — analysis_json is null on a failed analysis
+
+```
+Given an analysis in failed status
+Then analysis_json is null (per D-037)
+```
+
+##### M3-AC-43 — analysis_json is not returned in the list endpoint
+
+```
+Given completed analyses exist
+When GET /api/change-intelligence/analyses is called
+Then analysis_json is not present in any item in the response
+```
+
+---
+
+#### Retry
+
+##### M3-AC-44 — Retry on a failed analysis increments retry_count
+
+```
+Given an analysis in failed status with retry_count = 1
+When POST /analyses/:id/retry is called
+Then retry_count is 2 after the retry attempt (regardless of outcome)
+```
+
+##### M3-AC-45 — Retry clears error_code and error_message before processing
+
+```
+Given a failed analysis with error_code "PROVIDER_TIMEOUT"
+When POST /analyses/:id/retry is called
+Then error_code is null during processing
+And if the retry succeeds, error_code remains null
+And if the retry fails, error_code is set to the new failure reason
+```
+
+##### M3-AC-46 — Retry preserves original inputs
+
+```
+Given a failed analysis with persisted inputs
+When POST /analyses/:id/retry is called
+Then the same inputs are used for the retry (no inputs are added, modified, or removed)
+```
+
+##### M3-AC-47 — Successful retry results in completed status
+
+```
+Given a failed analysis
+When POST /analyses/:id/retry succeeds
+Then status is "completed"
+And analysis_json is non-null
+And retry_count reflects the number of attempts made
+```
+
+##### M3-AC-48 — Maximum retry enforcement is atomic
+
+```
+Given an analysis with retry_count = 2 (one retry remaining)
+When two concurrent POST /retry requests are made simultaneously
+Then exactly one succeeds (performs the AI call and returns a result)
+And the other returns 422 (retry limit enforced by conditional UPDATE)
+And retry_count does not exceed 3
+```
+
+---
+
+#### Cancellation
+
+##### M3-AC-49 — Cancel transitions ready analysis to cancelled
+
+```
+Given an analysis in ready status
+When POST /analyses/:id/cancel is called
+Then the response is 200
+And data.status is "cancelled"
+And the analysis cannot be retried or generated (only deleted)
+```
+
+##### M3-AC-50 — Cancelled analysis preserves all inputs and metadata
+
+```
+Given an analysis that was cancelled
+When GET /analyses/:id is called
+Then inputs are still present and unchanged
+And created_by, project_id, title, and all other metadata are unchanged
+```
+
+##### M3-AC-51 — Cancel returns 409 for processing analyses
+
+```
+Given an analysis in processing status
+When POST /analyses/:id/cancel is called
+Then the response is 409
+And the error message explicitly states that in-progress analysis cannot be cancelled in M3
+```
+
+---
+
+#### UI — Processing State
+
+##### M3-AC-52 — Ready analysis shows "Generate QA Intelligence" button
+
+```
+Given an authenticated user views an analysis in ready status
+When the detail page renders
+Then a "Generate QA Intelligence" button is visible and enabled
+And the button is the primary action
+```
+
+##### M3-AC-53 — Processing state shows a loading indicator
+
+```
+Given the user has clicked "Generate QA Intelligence"
+While the POST /generate request is in flight
+Then an animated processing indicator is visible
+And a message indicates analysis is in progress
+And no fake or placeholder AI output is shown
+```
+
+##### M3-AC-54 — No "Generate" button appears on completed, failed, or cancelled analyses
+
+```
+Given an analysis in completed, failed, or cancelled status
+When the detail page renders
+Then no "Generate QA Intelligence" button is present
+```
+
+##### M3-AC-55 — If the user navigates away during processing, the result is available on return
+
+```
+Given a user triggered generation and navigated away
+When the user returns to the analysis detail page after AI processing completes
+Then the page shows the completed or failed state
+And no data is lost
+```
+
+---
+
+#### UI — Completed Report
+
+##### M3-AC-56 — Completed analysis renders the QA Intelligence Report
+
+```
+Given an analysis in completed status
+When the detail page renders
+Then the QA Intelligence Report is displayed
+And the executive summary is the first section shown
+```
+
+##### M3-AC-57 — Risk level badge is displayed with appropriate visual treatment
+
+```
+Given a completed analysis with risk_level "high"
+Then the risk level badge displays "High" in the appropriate color
+And the badge has an aria-label attribute (not color-only)
+```
+
+##### M3-AC-58 — Report sections appear in the documented order
+
+```
+Given a completed analysis
+Then sections appear in this order:
+1. Executive Summary
+2. Change Summary
+3. Risk Assessment
+4. Impacted Components
+5. Regression Recommendations
+6. High Risk Scenarios
+7. Missing Requirements
+8. Ambiguities
+9. Edge Cases
+10. Recommended Test Focus
+11. Confidence and Limitations
+```
+
+##### M3-AC-59 — Metadata card shows processing details
+
+```
+Given a completed analysis
+Then a metadata card is visible showing:
+- Provider and AI model
+- Prompt version
+- Input token count, output token count
+- Processing duration
+- Confidence level (overall)
+```
+
+##### M3-AC-60 — Sections with empty arrays are hidden
+
+```
+Given a completed analysis where high_risk_scenarios is an empty array
+When the detail page renders
+Then the High Risk Scenarios section is not shown
+And no "None found" placeholder is shown for that section
+```
+
+##### M3-AC-61 — Executive Summary and Recommended Test Focus are always shown
+
+```
+Given a completed analysis
+Then the Executive Summary section is always visible
+And the Recommended Test Focus section is always visible
+Even if they contain minimal data
+```
+
+##### M3-AC-62 — Report is readable without horizontal scrolling at 1280px viewport
+
+```
+Given a completed analysis rendered at a 1280px viewport width
+Then no horizontal scrollbar is present on the page body
+And all content is accessible without horizontal scrolling
+```
+
+---
+
+#### UI — Failed State
+
+##### M3-AC-63 — Failed analysis shows a human-readable error explanation
+
+```
+Given an analysis with error_code "PROVIDER_TIMEOUT"
+When the detail page renders
+Then the user sees "The AI provider took too long to respond. Try again."
+And the raw error_message, stack trace, or internal error details are not shown
+```
+
+##### M3-AC-64 — Retry button is shown on failed analyses with retries remaining
+
+```
+Given an analysis in failed status with retry_count < 3
+When the detail page renders
+Then a "Retry Analysis" button is visible and enabled
+```
+
+##### M3-AC-65 — Retry button is disabled after 3 failed attempts
+
+```
+Given an analysis in failed status with retry_count = 3
+When the detail page renders
+Then the retry button is not shown or is disabled
+And a message indicates the maximum retry count has been reached
+```
+
+##### M3-AC-66 — Failed analysis shows the retry attempt count
+
+```
+Given an analysis in failed status with retry_count = 1
+When the detail page renders
+Then "Attempt 1 of 3" or equivalent wording is displayed
+```
+
+---
+
+#### Error Handling
+
+##### M3-AC-67 — Provider timeout transitions analysis to failed with PROVIDER_TIMEOUT
+
+```
+Given the Anthropic API call exceeds the configured timeout
+When the timeout is reached
+Then analysis transitions to failed
+And error_code is "PROVIDER_TIMEOUT"
+And a sanitized error_message is stored
+```
+
+##### M3-AC-68 — Provider error response transitions analysis to failed with PROVIDER_ERROR
+
+```
+Given the Anthropic API returns a non-200 error response
+Then analysis transitions to failed
+And error_code is "PROVIDER_ERROR"
+```
+
+##### M3-AC-69 — Unparseable AI output transitions analysis to failed with INVALID_OUTPUT
+
+```
+Given the AI response cannot be parsed as JSON
+Then analysis transitions to failed
+And error_code is "INVALID_OUTPUT"
+And analysis_json remains null
+```
+
+##### M3-AC-70 — Schema validation failure transitions analysis to failed with SCHEMA_VALIDATION_FAILED
+
+```
+Given the AI response is valid JSON but fails schema validation
+Then analysis transitions to failed
+And error_code is "SCHEMA_VALIDATION_FAILED"
+And analysis_json remains null
+```
+
+##### M3-AC-71 — DB write failure returns 500 and leaves analysis in a known state
+
+```
+Given the AI call succeeds
+And the DB write to persist the result fails after all retries
+Then the endpoint returns 500
+And the analysis is set to failed with error_code "DB_WRITE_FAILED" if the error handler can write;
+  otherwise the analysis remains in processing status
+```
+
+##### M3-AC-72 — Error responses never include stack traces, SQL, or driver details
+
+```
+Given any M3 error scenario
+Then the error_message stored in the database contains only sanitized text
+And no API response body contains stack traces, SQL statements, or driver details
+```
+
+##### M3-AC-73 — Change Intelligence failure does not affect any other QA Center feature
+
+```
+Given a POST /generate that results in an error
+When a user simultaneously uses AI Studio, test runs, or any other QA Center feature
+Then those features are unaffected
+And no error from Change Intelligence propagates outside the /api/change-intelligence/ namespace
+```
+
+---
+
+#### Security and Privacy
+
+##### M3-AC-74 — Input content is not logged at any level
+
+```
+Given any M3 log statement
+Then diff content, requirement text, and supplemental context are never included in log output
+And analysis_id, input_type, and status are the maximum field detail in logs
+```
+
+##### M3-AC-75 — analysis_json is not returned in list responses
+
+```
+Given completed analyses exist
+When GET /api/change-intelligence/analyses is called
+Then no response item contains analysis_json
+```
+
+##### M3-AC-76 — API keys and model configuration are not returned in any response
+
+```
+Given any M3 API response
+Then the Anthropic API key is never present
+And internal model configuration is not exposed
+```
+
+##### M3-AC-77 — Sanitized error messages are stored for failed analyses
+
+```
+Given a failed analysis
+Then error_message contains a human-readable description only
+And no provider error details, SQL, or stack traces appear in the stored error_message
+```
+
+---
+
+#### Performance
+
+##### M3-AC-78 — POST /generate completes within 120 seconds for typical inputs
+
+```
+Given an analysis with inputs totaling under 200,000 characters
+When POST /generate is called
+Then the endpoint returns within 120 seconds
+```
+
+##### M3-AC-79 — GET /analyses/:id returns within 500ms for completed analyses
+
+```
+Given a completed analysis with a populated analysis_json
+When GET /analyses/:id is called
+Then the response is returned within 500ms
+```
+
+##### M3-AC-80 — analysis_json is not included in the list query's SELECT clause
+
+```
+Given the implementation of GET /analyses
+Then the SQL query does not SELECT the analysis_json column
+```
+
+---
+
+#### Auditability
+
+##### M3-AC-81 — Every completed analysis has a full processing audit trail
+
+```
+Given a completed analysis
+Then ai_model is non-null
+And analysis_version is non-null
+And provider is non-null
+And temperature is non-null
+And input_tokens is non-null
+And output_tokens is non-null
+And processing_ms is non-null
+And started_at is non-null
+And completed_at is non-null
+```
+
+##### M3-AC-82 — retry_count accurately reflects the number of retry attempts
+
+```
+Given an analysis that failed on the first attempt and succeeded on the second
+Then retry_count is 1 (one retry was made)
+```
+
+##### M3-AC-83 — analysis_json contains the complete AI response without truncation
+
+```
+Given a completed analysis
+Then analysis_json contains all sections returned by the AI
+And no section is truncated or omitted
+```
+
+---
+
+#### Migration
+
+##### M3-AC-84 — Migration 033 adds all required columns to change_analyses
+
+```
+Given migration 033_change_intelligence.sql is applied
+Then change_analyses has columns: provider, temperature, analysis_json,
+  analysis_schema_version, risk_level, change_type_summary, input_tokens, output_tokens, processing_ms, retry_count
+And all new columns are nullable except retry_count (default 0)
+And no existing column is modified
+```
+
+##### M3-AC-85 — Migration 033 runs cleanly on a copy of the production schema
+
+```
+Given the migration is applied to a schema copy that already has migrations 031 and 032 applied
+Then the migration completes without errors
+And all existing change_analyses rows have retry_count = 0
+```
+
+---
+
+#### Backward Compatibility
+
+##### M3-AC-86 — All M2 acceptance criteria continue to pass after M3 deployment
+
+```
+Given M3 is deployed
+Then all M2-AC-01 through M2-AC-46 criteria pass
+```
+
+##### M3-AC-87 — All backward compatibility criteria BC-01 through BC-15 pass after M3 deployment
+
+```
+Given M3 is deployed
+Then all BC-01 through BC-15 criteria pass
 ```
 
 ---

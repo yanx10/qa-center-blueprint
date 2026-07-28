@@ -172,53 +172,89 @@ Run full regression smoke test of all existing workflows before merging.
 
 ---
 
-## Milestone 3 — Manual Input Analysis
+## Milestone 3 — AI Change Analysis
 
-**Goal:** Accept pasted requirement text and PR diff, run AI analysis, and save a completed analysis record.
+**Goal:** Transform persisted analysis inputs into a structured QA Intelligence Report using Claude AI. After M3, a QA lead can understand the testing impact of a change in under two minutes.
+
+**Status:** Specification Complete — Ready for Implementation
+
+**Full specification:** [`milestones/m3-ai-change-analysis.md`](milestones/m3-ai-change-analysis.md)
 
 ### Work items
 
-- [ ] Input form: requirement source type selector and text area
-- [ ] Input form: PR diff text area
-- [ ] Trigger AI analysis on a `ready` analysis record
-- [ ] Server-side validation of inputs
-- [ ] AI workflow: requirement extraction module
-- [ ] AI workflow: diff analysis module
-- [ ] Output: change summary
-- [ ] Output: extracted requirement list
-- [ ] Update analysis record with AI results (status → completed or failed)
-- [ ] Display analysis result page
-- [ ] All AI outputs show evidence, confidence, and uncertainty labels
+**Database:**
+- [ ] Add migration `033_change_intelligence.sql` with new nullable columns on `change_analyses` (provider, temperature, analysis_json, analysis_schema_version, risk_level, change_type_summary, input_tokens, output_tokens, processing_ms) plus `retry_count smallint NOT NULL DEFAULT 0`
+- [ ] Verify migration applies cleanly to a copy of the production schema with M2 migration already applied
+
+**Prompt:**
+- [ ] Create `lib/ai/prompts/change-intelligence.ts` with the m3-v1 system prompt, user prompt template, and version constant
+- [ ] Export `CHANGE_INTELLIGENCE_PROMPT_VERSION = 'm3-v1'` from the prompts file
+
+**AI Service Layer:**
+- [ ] Implement `lib/db/change-intelligence-analysis.ts` — service for reading inputs and writing results
+- [ ] Implement prompt builder: reads all inputs by type, applies ordering (pr_diff → requirements → supplemental), applies character limits, returns system + user prompts
+- [ ] Implement input size validation: reject with INPUT_TOO_LARGE before any AI call if combined inputs exceed MAX_TOTAL_INPUT_CHARACTERS
+- [ ] Call `generateStructuredAIResponse<T>()` from `lib/ai/anthropic.ts`
+- [ ] Implement output parser: parse JSON, validate against analysis schema, translate parse/validation errors to error codes
+- [ ] Implement result persistence: atomic UPDATE to change_analyses with all M3 fields
+- [ ] Implement error translator: map PostgreSQL errors, Anthropic errors, validation errors to error codes
+
+**API Routes:**
+- [ ] Implement `POST /api/change-intelligence/analyses/[id]/generate/route.ts`
+- [ ] Implement `POST /api/change-intelligence/analyses/[id]/retry/route.ts`
+- [ ] Implement `POST /api/change-intelligence/analyses/[id]/cancel/route.ts`
+- [ ] Update `GET /api/change-intelligence/analyses/[id]/route.ts` to include `analysis_json` when status is `completed`
+
+**UI:**
+- [ ] Update `/change-intelligence/analyses/[id]/page.tsx` to render all lifecycle states
+- [ ] Implement processing state (spinner, elapsed timer, no cancel button)
+- [ ] Implement QA Intelligence Report renderer (all sections, in documented order)
+- [ ] Implement failed state (error message per error_code, retry button, retry count display)
+- [ ] Implement metadata card (model, version, tokens, duration, confidence)
+- [ ] Update `/change-intelligence/page.tsx` list to show completed status pill and risk level badge
+
+**Testing:**
+- [ ] Unit tests: prompt builder, input size validator, output schema validator, error translator
+- [ ] API tests: all 3 new endpoints × happy path and all error cases
+- [ ] API tests: retry_count enforcement, concurrent retry race condition
+- [ ] Migration test: 033 applies cleanly after 031 and 032
+
+### Expected file impact
+
+| File | Change |
+|------|--------|
+| `033_change_intelligence.sql` | New migration — 9 new nullable columns + retry_count + change_type_summary |
+| `lib/ai/prompts/change-intelligence.ts` | New — m3-v1 system prompt, user prompt template, version constant |
+| `lib/db/change-intelligence-analysis.ts` | New — service layer: input reader, prompt builder, result writer |
+| `app/api/change-intelligence/analyses/[id]/generate/route.ts` | New |
+| `app/api/change-intelligence/analyses/[id]/retry/route.ts` | New |
+| `app/api/change-intelligence/analyses/[id]/cancel/route.ts` | New |
+| `app/api/change-intelligence/analyses/[id]/route.ts` | Update — include `analysis_json` when completed |
+| `app/change-intelligence/analyses/[id]/page.tsx` | Update — all lifecycle states + report renderer |
+| `app/change-intelligence/page.tsx` | Update — completed pill + risk badge |
+
+### What Milestone 3 must NOT include
+
+- No test case generation (M6)
+- No Playwright proposal generation (M7)
+- No GitHub API integration (M9)
+- No streaming AI responses
+- No multi-agent orchestration
+- No per-user pilot gating (M13)
+- No `change_requirements`, `change_risk_findings`, `change_generated_test_cases`, or `change_playwright_proposals` table creation or population
+- No editable prompts or prompt editor UI
+- No multi-provider support
 
 ### Database changes
-Introduces `change_requirements` table via an additive migration. See `data-model.md` for schema.
 
-### Does not include
-- GitHub API integration
-- Requirement-to-implementation comparison (Milestone 4)
-- Risk analysis (Milestone 5)
-- Test generation (Milestone 6)
+New columns on `change_analyses` via `033_change_intelligence.sql`. No new tables. No existing columns modified.
 
 ### Acceptance criteria
 
-```
-Given an analysis is in ready status with at least one pr_diff and one requirement input
-When the user triggers analysis
-Then QA Center runs the AI pipeline and displays a change summary
-And extracted requirements are listed
-And the analysis record status transitions to completed
-And all AI conclusions show evidence and confidence
-```
-
-```
-Given the AI call fails
-When the user triggers analysis
-Then an error is displayed and the analysis status transitions to failed
-And the failure does not affect any other QA Center page
-```
+See `acceptance-criteria.md` M3-AC-01 through M3-AC-87.
 
 ### Regression requirement
-Run full regression smoke test of all existing workflows before merging.
+Run full regression smoke test of all existing workflows before merging. See regression checklist at the bottom of this document.
 
 ---
 

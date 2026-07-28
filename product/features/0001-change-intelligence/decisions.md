@@ -419,7 +419,7 @@ These decisions are explicitly deferred. They must not be made by assumption. Ea
 
 ### D-021 — A failed or cancelled analysis cannot be retried in place; a new record must be created
 
-**Status:** [DECISION]
+**Status:** [SUPERSEDED by D-032 for M3 failed analyses; remains in force for cancelled analyses]
 **Date:** 2026-07-27
 
 **Decision:** There is no in-place retry mechanism for `failed` or `cancelled` analyses. The user must create a new `change_analyses` record and attach inputs again. The old record is preserved in its terminal state for audit purposes.
@@ -427,6 +427,8 @@ These decisions are explicitly deferred. They must not be made by assumption. Ea
 **Rationale:** Allowing in-place retry would require the status machine to permit transitions from `failed` or `cancelled` back to `ready`, which creates complex state and auditability problems. Creating a new record is simple, auditable, and consistent with the immutability principle of D-019.
 
 **Consequences:** The UI should make it easy to copy inputs from a failed or cancelled analysis into a new analysis (M3/UX scope). The old record remains queryable. The `created_by` on the new record will be the authenticated user at the time of retry.
+
+**Note for M3+:** D-032 supersedes this decision for `failed` analyses in M3 — in-place retry is introduced for analyses that fail during AI processing. Cancelled analyses still require a new record.
 
 ---
 
@@ -505,6 +507,203 @@ These decisions are explicitly deferred. They must not be made by assumption. Ea
 **Rationale:** Lowercase hex is the most portable representation and matches common SHA-256 output from cryptographic libraries. CRLF normalization ensures the hash is stable across operating systems — a diff pasted from a Windows machine should hash identically to the same diff on Unix. No algorithm prefix is stored because SHA-256 is the only algorithm used in this system. The purpose is deterministic comparison and idempotency checking, not a cryptographic security guarantee.
 
 **Consequences:** The hash comparison is valid for idempotency checking only when both sides apply the same canonicalization pipeline. Any change in the canonicalization rules requires a rehash of all existing inputs — a breaking change requiring a data migration. Resolves OQ-M2-05.
+
+---
+
+## Milestone 3 Decisions
+
+### D-028 — AI output stored as JSONB; downstream analysis tables are M4+ scope
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** M3 stores the complete AI output as a single JSONB object in `change_analyses.analysis_json`. The tables `change_requirements`, `change_risk_findings`, `change_generated_test_cases`, and `change_playwright_proposals` are deferred to M4+ milestones and are NOT created in M3.
+
+**Rationale:** The AI output schema will evolve as prompts are refined. Creating normalized rows now would require migrations every time the prompt changes what is extracted. Keeping findings as conceptual entities in JSONB until the schema stabilizes reduces churn. M4 will extract individual requirements into rows when per-requirement reviewer interaction is needed.
+
+**Consequences:** M3 never writes to `change_requirements` or any of the other downstream tables. The analysis_json JSONB field is the single source of truth for all AI output in M3.
+
+---
+
+### D-029 — M3 AI processing is synchronous (one HTTP round-trip)
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** `POST /generate` waits for the Anthropic API response and returns the result in the same HTTP response. No background jobs, message queues, or polling in M3. The server timeout is configured for 120 seconds.
+
+**Rationale:** The existing `generateStructuredAIResponse<T>()` function is synchronous (D-016). Building async infrastructure in M3 would require significant new tooling. Expected response times of 15–60 seconds are acceptable for the internal pilot.
+
+**Consequences:** Async processing is a [FUTURE] candidate if M3 latency proves unacceptable in broader use. The client must display a processing state while awaiting the synchronous response.
+
+---
+
+### D-030 — Findings are conceptual entities in M3, not database rows
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** Individual AI findings (risk items, coverage gaps, edge cases, recommendations) exist only within `analysis_json` in M3. They are not materialized as separate database rows.
+
+**Rationale:** Aligns with D-028. The finding schema will change as the QA Intelligence Report prompt matures. Materializing rows now creates migration and compatibility obligations before the schema is stable. Findings become independently actionable (and deserve DB rows) when M4 introduces per-finding reviewer interaction.
+
+**Consequences:** The QA Intelligence Report UI in M3 reads directly from `analysis_json`. No cross-finding queries or individual finding endpoints are possible in M3.
+
+---
+
+### D-031 — Five denormalized projection columns are populated from analysis_json on completion
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** After a successful AI analysis, four columns on `change_analyses` are populated as denormalized projections from `analysis_json`:
+
+| Column | Source in analysis_json |
+|--------|------------------------|
+| `change_summary` | `executive_summary.headline` |
+| `requirement_summary` | `executive_summary.primary_concern` |
+| `risk_level` | `executive_summary.risk_level` |
+| `analysis_schema_version` | `schema_version` |
+| `change_type_summary` | `change_summary.change_type` (array joined as comma-separated string) |
+
+All five are written atomically with `analysis_json` in the `persistSuccess()` transaction. None are recomputed on subsequent reads.
+
+**Rationale:** These fields are needed in the analysis list view. Including them as top-level columns avoids loading `analysis_json` (which can be up to ~5,000 tokens) in list queries. `risk_level` enables visual risk-level badges on the list. `analysis_schema_version` enables efficient filtering when the AI output schema evolves across milestones. `change_type_summary` enables list-level change-type display.
+
+**Consequences:** If the prompt evolves such that `executive_summary.headline`, `executive_summary.risk_level`, `schema_version`, or `change_summary.change_type` change their structure, the denormalization logic must be updated. A prompt version bump is required in that case (see D-035). The `persistSuccess()` implementation must include all five fields in a single `UPDATE` statement.
+
+---
+
+### D-032 — Retry updates the existing analysis record in-place
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** `POST /retry` does not create a new analysis record. It reuses the existing `analysis_id`, clears `error_code`, `error_message`, and `analysis_json`, increments `retry_count`, and re-runs AI processing. Maximum 3 retries total.
+
+**Rationale:** The user's intent is to re-run the same analysis, not to create a duplicate. Keeping the same ID preserves URL stability and simplifies UI state management. The `retry_count` cap prevents runaway retries in case of a persistent provider error.
+
+**Consequences:** Supersedes D-021 for M3 and later milestones. D-021 applied to M2 where no retry mechanism existed. In M3, in-place retry is the correct behavior because the analysis already has its inputs locked in `ready` state and there is no need to re-enter inputs.
+
+---
+
+### D-033 — Cancellation is supported from ready status only in M3
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** `POST /cancel` transitions `ready` → `cancelled`. Cancelling a `processing` analysis is not supported in M3 and returns 409.
+
+**Rationale:** M3 uses synchronous HTTP processing. Once the AI call is in flight, there is no mechanism to interrupt it. The 120-second server timeout is the only circuit breaker. A future async model would enable mid-flight cancellation.
+
+**Consequences:** The UI must not display a cancel button while the analysis is in the `processing` state in M3. This limitation must be communicated to users.
+
+---
+
+### D-034 — AI temperature fixed at 0.2 for all M3 analyses
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** The temperature parameter is hardcoded to 0.2 and is not user-configurable in M3.
+
+**Rationale:** QA analysis benefits from low temperature (high determinism). Temperature selection requires empirical calibration and UI surface area that is out of scope for M3.
+
+**Consequences:** If temperature configurability is needed, it should be addressed as a separate feature in M12 or later. The value 0.2 is stored in `change_analyses.temperature` on every completed analysis for auditability.
+
+---
+
+### D-035 — Prompt versioning format is "m{milestone}-v{sequence}"; M3 initial version is "m3-v1"
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** The prompt version identifier uses the format `"m{milestone}-v{sequence}"`. M3's initial prompt is `"m3-v1"`. The version is stored in `change_analyses.analysis_version` for every analysis. Any change to the prompt that could alter output structure or content requires incrementing the sequence (m3-v2, m3-v3, etc.).
+
+**Rationale:** Prompt changes affect output quality and schema. Recording the version on every analysis enables quality correlation, debugging, and safe prompt evolution without invalidating existing completed analyses.
+
+**Consequences:** A prompt change in M3 that is backwards-compatible (wording improvement, no structural change) may use a sub-version such as `"m3-v1.1"` — [OPEN] this sub-version convention is not yet decided and must be resolved before M4.
+
+---
+
+### D-036 — POST /generate and POST /retry return HTTP 200 for both completed and failed AI outcomes
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** Both `/generate` and `/retry` always return HTTP 200 when the request completes (whether AI succeeded or failed). The caller reads `data.status` to determine whether the AI succeeded (`status: completed`) or failed (`status: failed`). HTTP 4xx is reserved for precondition failures (wrong status, max retries). HTTP 5xx is reserved for unexpected server errors.
+
+**Rationale:** An AI failure is an expected outcome, not a server error. Using HTTP 200 for expected outcomes (even negative ones) keeps the HTTP status semantics clean and simplifies client error handling. A 200 with `status: failed` is explicitly different from a 500 with an unexpected server error.
+
+**Consequences:** Clients must not assume a 200 response means the analysis completed successfully — they must read `data.status`. This pattern is documented in the API contracts and the UI handles both outcomes from a single response.
+
+---
+
+### D-038 — M3 migration is registered as `033_change_intelligence`; `032` prefix is reserved
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** The M3 AI Change Analysis migration is named `033_change_intelligence` (both the registry entry and the `db/migrations/033_change_intelligence.sql` file). The `032` number prefix is already occupied by `032_change_intelligence_pr_description` (M2 UX polish, added the `pr_description` input type). Reusing the `032_` prefix for a second file would create migration ordering ambiguity.
+
+**Rationale:** The application's migration runner (registry-based, not file-scan-based) uses insertion-order from the `MIGRATIONS` array as the execution order. Having two entries with the same numeric prefix (`032_change_intelligence` and `032_change_intelligence_pr_description`) would make the ordering non-obvious and could cause confusion when reading the registry. Sequential numeric prefixes maintain clarity.
+
+**Consequences:** Any blueprint reference to `032_change_intelligence.sql` as the M3 migration file is incorrect. The M3 migration file is `033_change_intelligence.sql` and must be registered as `'033_change_intelligence'` in the `MIGRATIONS` array in `app/api/admin/migrate/route.ts` after the `032_change_intelligence_pr_description` entry.
+
+---
+
+### D-039 — `supplemental_context` is a valid `input_type`; `prd_text` is the canonical PRD input type
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** The canonical set of allowed `input_type` values for `change_analysis_inputs` is:
+`pr_diff`, `pr_description`, `requirement_text`, `jira_story`, `acceptance_criteria`, `prd_text`, `markdown_spec`, `supplemental_context`.
+
+The value `prd_text` is correct (not `prd_document`). The value `supplemental_context` is a valid input type referenced in the M3 prompt builder (OQ-M3-P prompt ordering) and M3-AC-25 — it must be added to the `chk_change_analysis_inputs_type` check constraint. A M2.x or M3 migration must drop and recreate this constraint to include both `supplemental_context` (if not already present from a future M2 polish migration) and any other new values. The M3 `033_change_intelligence.sql` migration must include this constraint update if `supplemental_context` is not already present.
+
+**Rationale:** The M2 migration `031_change_intelligence` created the constraint without `supplemental_context`. The M3 prompt builder references it as a recognized input ordering category. Including it in the constraint ensures DB-level validation matches the prompt builder's expectations.
+
+**Consequences:** The `033_change_intelligence.sql` migration must add `supplemental_context` to the `chk_change_analysis_inputs_type` CHECK constraint using a DROP + ADD CONSTRAINT pattern (idempotent). The `data-model.md` input_type enum list is authoritative.
+
+---
+
+### D-037 — Failed analysis records do not persist partial AI output; analysis_json remains null on failure
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** When AI processing fails for any reason (timeout, parse error, schema validation failure, or unexpected error), the analysis transitions to `failed` status with `error_code` and `error_message` populated. `analysis_json` remains `null`. Partial or structurally invalid AI output is not stored, even if the response contained some valid fields.
+
+**Rationale:** Storing partial output would create an ambiguous data state where some fields are populated and others are null, with no clear indication of what can be trusted. The validation layer enforces all-or-nothing semantics — if the complete output cannot be validated against the schema, none of it is stored. A `null` `analysis_json` on a failed record is an unambiguous signal that no valid output exists for that record.
+
+**Consequences:** If an analysis fails repeatedly due to `SCHEMA_VALIDATION_FAILED`, the issue is likely a prompt-schema incompatibility and should be investigated before further retries are attempted. The `error_code` distinguishes transient failures (`PROVIDER_TIMEOUT`, `PROVIDER_ERROR` — retry likely to succeed) from structural failures (`SCHEMA_VALIDATION_FAILED`, `INVALID_OUTPUT` — may indicate a prompt or schema issue requiring investigation). Retry (D-032) re-runs the full analysis from scratch on the original inputs.
+
+---
+
+### D-040 — The `change-intelligence-provider.ts` adapter is a thin integration seam and does not imply multi-provider capability in M3
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** `lib/ai/change-intelligence-provider.ts` is a thin adapter that wraps `generateStructuredAIResponse<T>()`. It provides a stable interface for the service layer to call without depending directly on the Anthropic client. It does not introduce provider selection, switching, or multi-provider routing in M3. The `provider` column on `change_analyses` records which provider was used (always `'anthropic'` in M3) for auditability. Provider switching is explicitly out of scope for M3.
+
+**Rationale:** Introducing a provider abstraction now (even as a thin seam) reduces coupling between the route handler and the Anthropic client. It also makes future provider swaps non-breaking for the service layer. However, advertising it as "multi-provider support" would create false expectations. The adapter pattern is a clean seam, not a feature.
+
+**Consequences:** `change-intelligence-provider.ts` exports exactly one function: a typed wrapper that calls `generateStructuredAIResponse<T>()` and returns `{ rawOutput, inputTokens, outputTokens, processingMs }`. No provider registry, no switching logic, no fallback — those belong to a future milestone (M12 or later). Multi-provider support is [FUTURE].
+
+---
+
+### D-041 — `schema_version: "1.0.0"` is the canonical schema version identifier for M3 AI output; server validator rejects any other value
+
+**Status:** [DECISION]
+**Date:** 2026-07-27
+
+**Decision:** Every AI response for M3 must include `schema_version: "1.0.0"` as the first field in the output JSON. The server-side validator treats any response where this field is absent or has a value other than `"1.0.0"` as a `SCHEMA_VALIDATION_FAILED` error. The schema version is not stored in a separate column; it is part of `analysis_json` and is preserved verbatim in every completed analysis record. It is also denormalized into `analysis_schema_version` (D-031).
+
+**Rationale:** Embedding the schema version in the output JSON creates a self-describing record. When the output schema changes in M4+, an analyst can query `analysis_json->>'schema_version'` to determine which analyses used which schema, enabling safe schema migration and version-gated UI rendering. Validating the version field first provides early failure detection before any other field is inspected.
+
+**Consequences:** Any prompt update that changes the output schema requires a version bump (`"1.0.0"` → `"1.1.0"` for additive changes, `"2.0.0"` for breaking changes) and a corresponding update to the server-side validator. Old analyses retain their original `schema_version` within `analysis_json`. The UI may use `schema_version` in M4+ to conditionally render sections that do not exist in older outputs.
 
 ---
 

@@ -12,6 +12,64 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.7.1] — 2026-07-27
+
+### M3 Blueprint Freeze
+
+- M3 — AI Change Analysis blueprint frozen for implementation (status: Blueprint Frozen — Ready for Implementation)
+- Final architecture review completed: all 87 acceptance criteria verified, all 6 open questions resolved
+- Canonical input type set finalized (8 types): `pr_diff`, `pr_description`, `requirement_text`, `acceptance_criteria`, `prd_text`, `jira_story`, `markdown_spec`, `supplemental_context`
+- Stale input type `prd_document` replaced with `prd_text` in api-design.md
+- Migration number confirmed as `033_change_intelligence.sql` throughout all blueprint documents
+- Fifth denormalized projection column added: `change_type_summary` (from `analysis_json.change_summary.change_type`)
+- D-031 updated: five denormalized projection columns now documented (change_summary, requirement_summary, risk_level, analysis_schema_version, change_type_summary)
+- D-040 added: `change-intelligence-provider.ts` is a thin integration seam; does not imply multi-provider support in M3
+- D-041 added: `schema_version: "1.0.0"` is the canonical M3 output schema version; server validator rejects any other value
+- Blueprint Freeze Record section added to milestone spec
+- All 6 open questions moved to Resolved Design Questions section with adopted resolutions
+- OQ-M3-UI-01 resolved in ui-design.md (risk_level badge uses denormalized column)
+- M3 production implementation not yet started
+
+---
+
+## [0.7.0] — 2026-07-27
+
+### Summary
+M3 — AI Change Analysis specification complete. New blueprint documents cover AI execution, prompt design, output schema, UI states, and comprehensive acceptance criteria.
+
+### Added
+- `product/features/0001-change-intelligence/milestones/m3-ai-change-analysis.md` — M3 milestone specification: AI execution model, processing lifecycle, API contracts, error strategy, retry policy, 87 acceptance criteria, M4 handoff
+- `product/features/0001-change-intelligence/prompt-design.md` — m3-v1 system and user prompt design, input ordering, token budget, output validation, versioning strategy
+- `product/features/0001-change-intelligence/analysis-schema.md` — canonical JSON schema for `analysis_json` (schema version 1.0.0), complete field reference, enum values, example output, validation rules
+- `product/features/0001-change-intelligence/ui-design.md` — M3 UI states for all analysis lifecycle states, QA Intelligence Report layout and section ordering, failed state error mapping, accessibility requirements
+- `product/features/0001-change-intelligence/overview.md` — concise single-page feature overview for non-technical readers
+
+### Changed
+- `product/features/0001-change-intelligence/decisions.md` — D-028 through D-036 added: JSONB storage, synchronous execution, HTTP 200 for domain failures, denormalized summary fields, in-place retry, ready-only cancellation, fixed temperature, prompt versioning, null JSON on failure
+- `product/features/0001-change-intelligence/data-model.md` — M3 additions documented: 7 new `change_analyses` columns (provider, temperature, analysis_json, input_tokens, output_tokens, processing_ms, retry_count); M2-reserved columns now populated by M3 documented; `change_requirements` and related tables clarified as M4+ scope
+- `product/features/0001-change-intelligence/api-design.md` — M3 endpoints added: POST /generate, POST /retry, POST /cancel; GET /:id enhanced with `analysis_json` for completed analyses
+- `product/features/0001-change-intelligence/acceptance-criteria.md` — M3-AC-01 through M3-AC-87 added across categories: feature gate, preconditions, execution, prompt building, schema validation, persistence, retry, cancellation, UI processing, UI report, UI failed state, error handling, security, performance, auditability, migration, backward compatibility
+- `product/features/0001-change-intelligence/implementation-plan.md` — M3 section replaced with AI Change Analysis work items, file impact table, and phased implementation checklist
+
+### Milestone status
+M0 Complete · M1 Complete · M2 Complete · M3 Specification Complete (ready for implementation) · M4–M14 Planned
+
+### Decisions recorded
+- D-028: Analysis output stored as JSONB in `analysis_json`; findings are conceptual, not DB rows, in M3
+- D-029: AI processing is synchronous in M3 — single HTTP round-trip, 120-second timeout
+- D-030: HTTP 200 returned for both `completed` and `failed` outcomes; client reads `data.status`
+- D-031: `change_summary` and `requirement_summary` are denormalized projections of `analysis_json`
+- D-032: Retry updates existing analysis record in-place; maximum 3 retries
+- D-033: Cancellation supported only from `ready` state; in-progress analyses cannot be cancelled in M3
+- D-034: Temperature fixed at 0.2 for deterministic QA analysis
+- D-035: Prompt versioning required; `"m3-v1"` is the M3 version
+- D-036: Failed analyses persist error metadata; `analysis_json` is null on failure
+
+### Why
+M3 introduces the AI execution engine that transforms M2's persisted inputs into structured QA intelligence. The blueprint covers architectural decisions (synchronous execution, JSONB storage, conceptual findings, in-place retry) that differ significantly from the naive "call the LLM" approach and must be established before implementation begins.
+
+---
+
 ## [0.6.0] — 2026-07-27
 
 ### Summary
